@@ -1,0 +1,25 @@
+{
+  "name": "orchestra",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ORCHESTRA — Agentic Mission-Execution Platform for Alexa+ Hackathon 2026",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run --workspaces build",
+    "typecheck": "npm run --workspaces typecheck",
+    "test": "npm run --workspaces test",
+    "test:integration": "npm run --workspace=@orchestra/mcp-client test:integration",
+    "start:mcp-server": "npm run --workspace=@orchestra/mcp-server start",
+    "start:web": "npm run --workspace=@orchestra/web start"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=22.0.0",
+    "npm": ">=10.0.0"
+  }
+}

@@ -1,0 +1,16 @@
+node_modules
+dist
+.git
+.gitignore
+*.log
+.env
+.env.*
+.DS_Store
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+data
+*.tsbuildinfo
+docs
+.gemini

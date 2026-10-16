@@ -1,0 +1,62 @@
+services:
+  mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["npm", "run", "start:mcp-server"]
+    environment:
+      - NODE_ENV=production
+      - MCP_SERVER_HOST=0.0.0.0
+      - MCP_SERVER_PORT=3001
+      - MCP_SERVER_ENDPOINT=/mcp
+      - MCP_ALLOWED_HOSTS=mcp-server,localhost,127.0.0.1
+    expose:
+      # Internal bridge port only — zero host interfaces published
+      - "3001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - orchestra-internal
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["npm", "run", "start:web"]
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - HOST=0.0.0.0
+      - MCP_SERVER_URL=http://mcp-server:3001/mcp
+      - DB_PATH=/data/orchestra.db
+      - ORCHESTRA_API_KEY=${ORCHESTRA_API_KEY:-}
+      - ALLOW_INSECURE_NO_AUTH=${ALLOW_INSECURE_NO_AUTH:-}
+    ports:
+      - "3000:3000"
+    volumes:
+      - orchestra-storage:/data
+    depends_on:
+      mcp-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - orchestra-internal
+
+volumes:
+  orchestra-storage:
+    name: orchestra-data
+
+networks:
+  orchestra-internal:
+    driver: bridge
