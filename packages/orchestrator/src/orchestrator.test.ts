@@ -14,8 +14,6 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 test('ORCHESTRA Comprehensive Orchestration Engine Test Suite', async (t) => {
-  const TEST_PORT = 3299;
-  const TEST_URL = `http://127.0.0.1:${TEST_PORT}/mcp`;
   const TEST_SERVER_DB = path.join(process.cwd(), 'test-orch-server.db');
   const TEST_ORCH_DB = path.join(process.cwd(), 'test-orch-engine.db');
 
@@ -28,11 +26,12 @@ test('ORCHESTRA Comprehensive Orchestration Engine Test Suite', async (t) => {
 
   const serverInstance = createOrchestraServer({
     host: '127.0.0.1',
-    port: TEST_PORT,
+    port: 0,
     endpoint: '/mcp',
     dbPath: TEST_SERVER_DB
   });
   const runningServer = await serverInstance.listen();
+  const TEST_URL = `http://127.0.0.1:${runningServer.port}/mcp`;
 
   t.after(async () => {
     await runningServer.close();
@@ -165,7 +164,7 @@ test('ORCHESTRA Comprehensive Orchestration Engine Test Suite', async (t) => {
     await orch.connect();
 
     const tools = await orch.mcpClient.listTools();
-    assert.equal(tools.length, 16, 'All 16 tools discovered over Streamable HTTP');
+    assert.equal(tools.length, 30, 'All 30 tools discovered over Streamable HTTP');
 
     const res = await orch.mcpClient.callTool('search_knowledge', { query: 'Roadmap' }) as { results: unknown[] };
     assert.ok(res.results.length > 0, 'Physical tool call returned demonstration records');

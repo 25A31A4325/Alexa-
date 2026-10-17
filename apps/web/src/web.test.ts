@@ -4,6 +4,7 @@ import { Server } from 'node:http';
 import { createWebApp } from './server.js';
 import { OrchestratorDatabase, MissionOrchestrator } from '@orchestra/orchestrator';
 import { ToolDatabase, createOrchestraServer } from '@orchestra/mcp-server';
+import { AuthService } from './auth.js';
 import { INVARIANT_SIDEBAR_ITEMS } from './components/sidebar.js';
 import { classifyTool, renderToolsPage } from './pages/tools.js';
 
@@ -15,6 +16,15 @@ describe('ORCHESTRA Phase 5.1 — UI/Backend Integration & Security Audit', () =
   let orchestratorDb: OrchestratorDatabase;
   let toolDb: ToolDatabase;
   let orchestrator: MissionOrchestrator;
+  let originalFetch: typeof fetch;
+  let browserSessionId: string | undefined;
+  let privateDocumentId: string | undefined;
+  let webApp: ReturnType<typeof createWebApp>;
+  let emailLinks: string[] = [];
+  let previousResendKey: string | undefined;
+  let previousEmailFrom: string | undefined;
+  let authenticatedCookie: string | undefined;
+  let authBrowserSessionId: string | undefined;
 
   before(async () => {
     // 1. Start live MCP Server on dynamic port
@@ -42,12 +52,28 @@ describe('ORCHESTRA Phase 5.1 — UI/Backend Integration & Security Audit', () =
     await orchestrator.connect();
 
     // 4. Start Web Application connected to live orchestrator and databases
-    const web = createWebApp({
+    previousResendKey = process.env.RESEND_API_KEY;
+    previousEmailFrom = process.env.AUTH_EMAIL_FROM;
+    process.env.RESEND_API_KEY = 'test-resend-key';
+    process.env.AUTH_EMAIL_FROM = 'ORCHESTRA <test@example.com>';
+    emailLinks = [];
+    const authService = new AuthService({
+      dbPath: ':memory:',
+      fetchImpl: async (_input, init) => {
+        const payload = JSON.parse(String(init?.body)) as { text?: string };
+        const link = payload.text?.match(/https?:\/\/\S+/)?.[0];
+        if (link) emailLinks.push(link);
+        return new Response(null, { status: 200 });
+      }
+    });
+    webApp = createWebApp({
       orchestrator,
       orchestratorDb,
       toolDb,
-      mcpServerUrl
+      mcpServerUrl,
+      authService
     });
+    const web = webApp;
 
     await new Promise<void>((resolve) => {
       webServer = web.app.listen(0, '127.0.0.1', () => {
@@ -58,9 +84,40 @@ describe('ORCHESTRA Phase 5.1 — UI/Backend Integration & Security Audit', () =
         resolve();
       });
     });
+    originalFetch = globalThis.fetch;
+    const initialSessionResponse = await originalFetch(`${webBaseUrl}/api/integrations`);
+    const initialSetCookie = initialSessionResponse.headers.get('set-cookie');
+    const initialCookie = initialSetCookie?.split(';', 1)[0];
+    if (initialCookie?.startsWith('orchestra_session=')) {
+      browserSessionId = decodeURIComponent(initialCookie.slice('orchestra_session='.length)).split('.')[0];
+    }
+    const cookies = new Map<string, string>();
+    if (initialCookie) cookies.set(new URL(webBaseUrl).origin, initialCookie);
+    globalThis.fetch = async (
+      input: Parameters<typeof fetch>[0],
+      init?: Parameters<typeof fetch>[1]
+    ): Promise<Response> => {
+      const requestUrl = input instanceof Request ? new URL(input.url) : new URL(input.toString());
+      const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined));
+      const explicitCookie = headers.has('cookie');
+      if (!explicitCookie && cookies.has(requestUrl.origin)) {
+        headers.set('cookie', cookies.get(requestUrl.origin)!);
+      }
+      const response = await originalFetch(input, { ...init, headers });
+      const setCookie = response.headers.get('set-cookie');
+      if (setCookie && !explicitCookie) {
+        const cookie = setCookie.split(';', 1)[0]!;
+        cookies.set(requestUrl.origin, cookie);
+        if (requestUrl.origin === new URL(webBaseUrl).origin && cookie.startsWith('orchestra_session=')) {
+          browserSessionId = decodeURIComponent(cookie.slice('orchestra_session='.length)).split('.')[0];
+        }
+      }
+      return response;
+    };
   });
 
   after(async () => {
+    globalThis.fetch = originalFetch;
     webServer.closeAllConnections?.();
     await new Promise<void>((resolve) => {
       webServer.close(() => resolve());
@@ -71,6 +128,11 @@ describe('ORCHESTRA Phase 5.1 — UI/Backend Integration & Security Audit', () =
     });
     await orchestrator.close();
     toolDb.close();
+    try { webApp.authService.close(); } catch {}
+    if (previousResendKey === undefined) delete process.env.RESEND_API_KEY;
+    else process.env.RESEND_API_KEY = previousResendKey;
+    if (previousEmailFrom === undefined) delete process.env.AUTH_EMAIL_FROM;
+    else process.env.AUTH_EMAIL_FROM = previousEmailFrom;
   });
 
   // =========================================================================
@@ -186,9 +248,10 @@ describe('ORCHESTRA Phase 5.1 — UI/Backend Integration & Security Audit', () =
     assert.ok(html.includes('Consequential Gate'), 'verify_action must be flagged as Consequential Gate');
   });
 
-  test('UI-TOOL-02: Backend classification strictly marks unknown tools as "Classification unavailable"', () => {
+  test('UI-TOOL-02: Backend classification blocks unknown tools until explicitly classified', () => {
     const unknown = classifyTool('nonexistent_custom_tool');
-    assert.equal(unknown.classification, 'Classification unavailable');
+    assert.equal(unknown.classification, 'Blocked until classified');
+    assert.equal(unknown.consequential, true);
     assert.equal(unknown.category, 'Unclassified');
   });
 
@@ -245,16 +308,21 @@ describe('ORCHESTRA Phase 5.1 — UI/Backend Integration & Security Audit', () =
   });
 
   // =========================================================================
-  // 5. INTEGRATIONS & DEMO ADAPTER TRANSPARENCY
+  // 5. REAL PROVIDER INTEGRATION STATES
   // =========================================================================
-  test('UI-INT-01: Integrations route displays connectors and distinguishes demo adapters', async () => {
+  test('UI-INT-01: Integrations route displays OAuth-backed providers and no demo connectors', async () => {
     const res = await fetch(`${webBaseUrl}/integrations`);
     assert.equal(res.status, 200);
     const html = await res.text();
 
-    assert.ok(html.includes('Alexa & Google Calendar'));
-    assert.ok(html.includes('Slack & Alexa Messaging'));
-    assert.ok(html.includes('LOCAL DEMO'));
+    assert.ok(html.includes('Google Calendar'));
+    assert.ok(html.includes('Gmail'));
+    assert.ok(html.includes('Google Drive'));
+    assert.ok(html.includes('GitHub'));
+    assert.ok(html.includes('gmail.readonly'));
+    assert.ok(html.includes('Loading status'));
+    assert.ok(!html.includes('Slack'));
+    assert.ok(!html.includes('LOCAL DEMO'));
   });
 
   // =========================================================================
@@ -265,7 +333,8 @@ describe('ORCHESTRA Phase 5.1 — UI/Backend Integration & Security Audit', () =
       id: `act-audit-${Date.now()}`,
       eventType: 'Mission',
       title: 'Audit Verification Event',
-      description: 'Audit test record persisted in SQLite'
+      description: 'Audit test record persisted in SQLite',
+      ownerSessionId: browserSessionId
     });
 
     const res = await fetch(`${webBaseUrl}/activity`);
@@ -394,6 +463,7 @@ describe('ORCHESTRA Phase 5.1 — UI/Backend Integration & Security Audit', () =
   test('UI-FAIL-01: Controlled failure leaves mission visibly in FAILED state without false completion', async () => {
     const missionId = `m-controlled-fail-${Date.now()}`;
     orchestratorDb.createMission(missionId, 'Mission doomed to failure');
+    orchestratorDb.setMissionOwner(missionId, browserSessionId!);
     orchestratorDb.updateMissionStatus(missionId, 'FAILED', 'Controlled failure test: simulation error');
 
     const res = await fetch(`${webBaseUrl}/api/missions/${missionId}/state`);
@@ -416,6 +486,7 @@ describe('ORCHESTRA Phase 5.1 — UI/Backend Integration & Security Audit', () =
   test('UI-CLARIFY-01: Needs clarification state displays input and resumes via POST /api/missions/:id/clarify', async () => {
     const missionId = `m-clarify-${Date.now()}`;
     orchestratorDb.createMission(missionId, 'Ambiguous meeting brief');
+    orchestratorDb.setMissionOwner(missionId, browserSessionId!);
     orchestratorDb.updateMissionStatus(missionId, 'NEEDS_CLARIFICATION');
     orchestratorDb.setClarificationPrompt(missionId, 'Specify participant list');
 
@@ -443,6 +514,7 @@ describe('ORCHESTRA Phase 5.1 — UI/Backend Integration & Security Audit', () =
   test('UI-REJECT-01: Human rejection safely halts consequential action without execution', async () => {
     const missionId = `m-reject-${Date.now()}`;
     orchestratorDb.createMission(missionId, 'Action that user rejects');
+    orchestratorDb.setMissionOwner(missionId, browserSessionId!);
     orchestratorDb.updateMissionStatus(missionId, 'AWAITING_APPROVAL');
 
     const plan = orchestratorDb.createPlan(`p-rej-${Date.now()}`, missionId);
@@ -490,6 +562,7 @@ describe('ORCHESTRA Phase 5.1 — UI/Backend Integration & Security Audit', () =
   test('UI-SSE-01: SSE stream sends state_sync on connection, assigns stable deduplication IDs, and handles clean disconnect', async () => {
     const missionId = `m-sse-test-${Date.now()}`;
     orchestratorDb.createMission(missionId, 'SSE stream validation mission');
+    orchestratorDb.setMissionOwner(missionId, browserSessionId!);
 
     const controller = new AbortController();
     const response = await fetch(`${webBaseUrl}/api/missions/${missionId}/events`, {
@@ -669,7 +742,7 @@ describe('ORCHESTRA Phase 5.1 — UI/Backend Integration & Security Audit', () =
     const html = await res.text();
 
     assert.ok(html.includes('Your request is complete!'), 'Must contain completion headline');
-    assert.ok(html.includes('Save to Notion'), 'Must contain Save to Notion button');
+    assert.ok(html.includes('Manage Integrations'), 'Must not imply an unsupported external save succeeded');
     assert.ok(html.includes('Export'), 'Must contain Export button');
     assert.ok(html.includes('Summary'), 'Tab Summary must exist');
     assert.ok(html.includes('Action Plan'), 'Tab Action Plan must exist');
@@ -731,10 +804,20 @@ describe('ORCHESTRA Phase 5.1 — UI/Backend Integration & Security Audit', () =
   test('UI-AUTH-01: Production login establishes an HttpOnly session for the Tools page and API', async () => {
     const previousNodeEnv = process.env.NODE_ENV;
     const previousApiKey = process.env.ORCHESTRA_API_KEY;
+    const productionAuth = new AuthService({
+      dbPath: ':memory:',
+      fetchImpl: async () => new Response(null, { status: 200 })
+    });
     process.env.NODE_ENV = 'production';
     process.env.ORCHESTRA_API_KEY = 'web-auth-test-key';
 
-    const protectedWeb = createWebApp({ mcpServerUrl: mcpServerUrl, dbPath: ':memory:' });
+    const protectedWeb = createWebApp({
+      mcpServerUrl,
+      dbPath: ':memory:',
+      authService: productionAuth
+    });
+    const registered = await productionAuth.register('webuser@example.com', 'StrongPassword2026!');
+    assert.equal(productionAuth.verifyEmailToken(registered.verificationToken), true);
     if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = previousNodeEnv;
     if (previousApiKey === undefined) delete process.env.ORCHESTRA_API_KEY;
@@ -753,26 +836,47 @@ describe('ORCHESTRA Phase 5.1 — UI/Backend Integration & Security Audit', () =
 
       const loginPage = await fetch(`${protectedBaseUrl}/login`);
       assert.equal(loginPage.status, 200);
-      assert.ok((await loginPage.text()).includes('App access key'));
+      const loginHtml = await loginPage.text();
+      assert.ok(loginHtml.includes('Email address'), 'Login form includes email input');
+      assert.ok(loginHtml.includes('Sign in'), 'Login form includes Sign in button');
+      assert.ok(!loginHtml.includes('App access key'), 'User login form does not display an access key field');
 
       const rejectedLogin = await fetch(`${protectedBaseUrl}/auth/login`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          Origin: protectedBaseUrl
+        },
         body: new URLSearchParams({ apiKey: 'wrong-key', returnTo: '/tools' }),
         redirect: 'manual'
       });
-      assert.equal(rejectedLogin.status, 401);
+      assert.equal(rejectedLogin.status, 400);
+      assert.ok(!rejectedLogin.headers.get('set-cookie')?.includes('orchestra_auth='));
 
       const login = await fetch(`${protectedBaseUrl}/auth/login`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ apiKey: 'web-auth-test-key', returnTo: '/tools' }),
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          Origin: protectedBaseUrl
+        },
+        body: new URLSearchParams({
+          email: 'webuser@example.com',
+          password: 'StrongPassword2026!',
+          returnTo: '/tools'
+        }),
         redirect: 'manual'
       });
       assert.equal(login.status, 302);
       assert.equal(login.headers.get('location'), '/tools');
-      const cookie = login.headers.get('set-cookie')?.split(';')[0];
-      assert.ok(cookie?.startsWith('orchestra_key='));
+      const cookies = login.headers.getSetCookie().map((value) => value.split(';')[0]!);
+      const authCookie = cookies.find((value) => value.startsWith('orchestra_auth='));
+      assert.ok(authCookie);
+      const cookie = authCookie!;
+      const authCookieAttributes = login.headers.getSetCookie()
+        .find((value) => value.startsWith('orchestra_auth='))!;
+      assert.match(authCookieAttributes, /HttpOnly/i);
+      assert.match(authCookieAttributes, /Secure/i);
+      assert.match(authCookieAttributes, /SameSite=Lax/i);
 
       const toolsPage = await fetch(`${protectedBaseUrl}/tools`, {
         headers: { Cookie: cookie! }
@@ -785,13 +889,375 @@ describe('ORCHESTRA Phase 5.1 — UI/Backend Integration & Security Audit', () =
       });
       assert.equal(toolsApi.status, 200);
       const catalog = await toolsApi.json() as { tools: unknown[] };
-      assert.equal(catalog.tools.length, 16);
+      assert.equal(catalog.tools.length, 30);
+
+      const apiKeyApi = await fetch(`${protectedBaseUrl}/api/tools`, {
+        headers: { Authorization: 'Bearer web-auth-test-key' }
+      });
+      assert.equal(apiKeyApi.status, 200, 'Internal API key remains valid in request headers');
+
+      const keyCookieApi = await fetch(`${protectedBaseUrl}/api/tools`, {
+        headers: { Cookie: 'orchestra_key=web-auth-test-key' }
+      });
+      assert.equal(keyCookieApi.status, 401, 'API key cookies are not browser authentication');
+      const keyCookiePage = await fetch(`${protectedBaseUrl}/tools`, {
+        headers: { Cookie: 'orchestra_key=web-auth-test-key' },
+        redirect: 'manual'
+      });
+      assert.equal(keyCookiePage.status, 302, 'API keys cannot authenticate browser pages');
     } finally {
       protectedServer.closeAllConnections();
       await new Promise<void>((resolve, reject) => protectedServer.close((error) => error ? reject(error) : resolve()));
       await protectedWeb.orchestrator.mcpClient.close();
       protectedWeb.orchestratorDb.close();
       protectedWeb.toolDb.close();
+      productionAuth.close();
+    }
+  });
+
+  test('UI-AUTH-EMAIL-01: Registration validates credentials, hashes passwords, and requires email verification', async () => {
+    // 1. Visit /register
+    const registerPage = await fetch(`${webBaseUrl}/register`);
+    assert.equal(registerPage.status, 200);
+    const registerHtml = await registerPage.text();
+    assert.ok(registerHtml.includes('Create your account'));
+    assert.ok(registerHtml.includes('Email address'));
+    assert.ok(registerHtml.includes('Confirm password'));
+    assert.ok(!registerHtml.includes('App access key'));
+
+    // 2. Reject mismatched passwords
+    const mismatchRes = await fetch(`${webBaseUrl}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        email: 'testuser@example.com',
+        password: 'Password123!',
+        confirmPassword: 'DifferentPassword123!'
+      }),
+      redirect: 'manual'
+    });
+    assert.equal(mismatchRes.status, 400);
+    assert.ok((await mismatchRes.text()).includes('Passwords do not match'));
+
+    // 3. Reject malformed email addresses
+    const invalidEmailRes = await fetch(`${webBaseUrl}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        email: 'not-an-email',
+        password: 'SecurePassword2026!',
+        confirmPassword: 'SecurePassword2026!'
+      }),
+      redirect: 'manual'
+    });
+    assert.equal(invalidEmailRes.status, 400);
+    assert.ok((await invalidEmailRes.text()).includes('valid email'));
+
+    // 4. Reject passwords shorter than the server-side minimum
+    const shortPwdRes = await fetch(`${webBaseUrl}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        email: 'testuser@example.com',
+        password: 'short',
+        confirmPassword: 'short'
+      }),
+      redirect: 'manual'
+    });
+    assert.equal(shortPwdRes.status, 400);
+    assert.ok((await shortPwdRes.text()).includes('at least 12 characters'));
+
+    // 5. Successful registration
+    const registerRes = await fetch(`${webBaseUrl}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        name: 'Test Builder',
+        email: 'testbuilder@example.com',
+        password: 'SecurePassword2026!',
+        confirmPassword: 'SecurePassword2026!'
+      }),
+      redirect: 'manual'
+    });
+    assert.equal(registerRes.status, 200);
+    assert.ok((await registerRes.text()).includes('check your inbox for a verification link'));
+    assert.equal(registerRes.headers.getSetCookie().some((value) => value.includes('orchestra_auth=')), false);
+    const verificationLink = emailLinks.find((link) => link.includes('/verify-email?token='));
+    assert.ok(verificationLink, 'A real verification message is handed to the email provider');
+    const verificationToken = new URL(verificationLink!).searchParams.get('token');
+    assert.ok(verificationToken);
+    const unverifiedLogin = await fetch(`${webBaseUrl}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        email: 'testbuilder@example.com',
+        password: 'SecurePassword2026!'
+      }),
+      redirect: 'manual'
+    });
+    assert.equal(unverifiedLogin.status, 403);
+    assert.ok(!unverifiedLogin.headers.get('set-cookie')?.includes('orchestra_auth='));
+    const verifyRes = await fetch(`${webBaseUrl}/verify-email?token=${encodeURIComponent(verificationToken!)}`);
+    assert.equal(verifyRes.status, 200);
+    assert.ok((await verifyRes.text()).includes('Email verified'));
+
+    // 6. Duplicate registration returns the same generic response to avoid enumeration
+    const dupRes = await fetch(`${webBaseUrl}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        email: 'testbuilder@example.com',
+        password: 'SecurePassword2026!',
+        confirmPassword: 'SecurePassword2026!'
+      }),
+      redirect: 'manual'
+    });
+    assert.equal(dupRes.status, 200);
+    assert.ok((await dupRes.text()).includes('If the address is eligible'));
+  });
+
+  test('UI-AUTH-EMAIL-02: Sign in with valid credentials, reject invalid credentials, and session persistence', async () => {
+    // 1. Invalid email or password
+    const wrongRes = await fetch(`${webBaseUrl}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        email: 'testbuilder@example.com',
+        password: 'WrongPassword999!'
+      }),
+      redirect: 'manual'
+    });
+    assert.equal(wrongRes.status, 401);
+    assert.ok((await wrongRes.text()).includes('Invalid email or password'));
+
+    // 2. Successful sign-in
+    const loginRes = await fetch(`${webBaseUrl}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        email: 'testbuilder@example.com',
+        password: 'SecurePassword2026!',
+        returnTo: '/settings'
+      }),
+      redirect: 'manual'
+    });
+    assert.equal(loginRes.status, 302);
+    assert.equal(loginRes.headers.get('location'), '/settings');
+    const authCookie = loginRes.headers.getSetCookie().find((value) => value.startsWith('orchestra_auth='));
+    assert.ok(authCookie);
+    const cookieHeader = authCookie!.split(';')[0]!;
+    authenticatedCookie = cookieHeader;
+    const loginToken = decodeURIComponent(cookieHeader.slice('orchestra_auth='.length));
+    const resolvedSession = webApp.authService.resolveSession(loginToken);
+    assert.ok(resolvedSession);
+    authBrowserSessionId = resolvedSession!.browserSessionId;
+    assert.equal(authBrowserSessionId, resolvedSession!.userId);
+
+    // 3. Access protected route with session cookie
+    const settingsRes = await fetch(`${webBaseUrl}/settings`, {
+      headers: { Cookie: cookieHeader }
+    });
+    assert.equal(settingsRes.status, 200);
+    const currentUser = await fetch(`${webBaseUrl}/api/auth/me`, {
+      headers: { Cookie: cookieHeader }
+    });
+    assert.equal(currentUser.status, 200);
+    assert.equal((await currentUser.json() as { user: { email: string } }).user.email, 'testbuilder@example.com');
+
+    // 4. Logout clears session
+    const logoutRes = await fetch(`${webBaseUrl}/auth/logout`, {
+      headers: { Cookie: cookieHeader },
+      redirect: 'manual'
+    });
+    assert.equal(logoutRes.status, 302);
+    assert.equal(logoutRes.headers.get('location'), '/login');
+    const expiredAfterLogout = await fetch(`${webBaseUrl}/settings`, {
+      headers: { Cookie: cookieHeader },
+      redirect: 'manual'
+    });
+    assert.equal(expiredAfterLogout.status, 302);
+  });
+
+  test('UI-AUTH-EMAIL-03: Password reset and anti-enumeration verification flow', async () => {
+    // 1. Visit /forgot-password
+    const forgotPage = await fetch(`${webBaseUrl}/forgot-password`);
+    assert.equal(forgotPage.status, 200);
+    assert.ok((await forgotPage.text()).includes('Reset your password'));
+
+    // 2. Request password reset (anti-enumeration message returned)
+    const resetReq = await fetch(`${webBaseUrl}/auth/forgot-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ email: 'testbuilder@example.com' })
+    });
+    assert.equal(resetReq.status, 200);
+    const knownResetNotice = await resetReq.text();
+    assert.ok(knownResetNotice.includes('reset instructions will be sent when email delivery is available'));
+    const unknownResetReq = await fetch(`${webBaseUrl}/auth/forgot-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ email: 'missing-account@example.com' })
+    });
+    assert.equal(unknownResetReq.status, 200);
+    assert.equal(await unknownResetReq.text(), knownResetNotice, 'Forgot-password response does not reveal account existence');
+    const loginBeforeReset = await fetch(`${webBaseUrl}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        email: 'testbuilder@example.com',
+        password: 'SecurePassword2026!'
+      }),
+      redirect: 'manual'
+    });
+    assert.equal(loginBeforeReset.status, 302);
+    authenticatedCookie = loginBeforeReset.headers.getSetCookie()
+      .find((value) => value.startsWith('orchestra_auth='))!.split(';')[0]!;
+    const preResetToken = decodeURIComponent(authenticatedCookie.slice('orchestra_auth='.length));
+    const preResetSession = webApp.authService.resolveSession(preResetToken);
+    assert.equal(preResetSession?.browserSessionId, authBrowserSessionId);
+
+    // 3. Verify an email was sent without exposing account existence
+    const resetLink = emailLinks.filter((link) => link.includes('/reset-password?token=')).at(-1);
+    assert.ok(resetLink, 'A reset link is handed to the email provider');
+    const resetToken = new URL(resetLink!).searchParams.get('token');
+    assert.ok(resetToken);
+
+    // 4. Reset password and revoke the existing authenticated session
+    const resetPasswordRes = await fetch(`${webBaseUrl}/auth/reset-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        token: resetToken!,
+        password: 'DifferentSecurePassword2026!',
+        confirmPassword: 'DifferentSecurePassword2026!'
+      }),
+      redirect: 'manual'
+    });
+    assert.equal(resetPasswordRes.status, 302);
+    const oldSession = await fetch(`${webBaseUrl}/settings`, {
+      headers: { Cookie: authenticatedCookie! },
+      redirect: 'manual'
+    });
+    assert.equal(oldSession.status, 302, 'Reset revokes all previously issued sessions');
+    const replay = await fetch(`${webBaseUrl}/auth/reset-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        token: resetToken!,
+        password: 'ReplaySecurePassword2026!',
+        confirmPassword: 'ReplaySecurePassword2026!'
+      }),
+      redirect: 'manual'
+    });
+    assert.equal(replay.status, 400, 'A reset token cannot be replayed');
+
+    // 5. Verify SQLite stores only the token hash
+    const db = (webApp as any).authService.db;
+    const tokenRow = db.prepare("SELECT token_hash FROM auth_email_tokens WHERE type = 'password_reset' ORDER BY created_at DESC LIMIT 1").get();
+    assert.ok(tokenRow, 'Reset token generated in SQLite');
+    assert.ok(!Object.values(tokenRow).includes(resetToken), 'Raw reset tokens are not persisted');
+  });
+
+  test('UI-AUTH-SESSION-01: Server-side sessions expire and protected APIs reject missing sessions', async () => {
+    const loginRes = await fetch(`${webBaseUrl}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        email: 'testbuilder@example.com',
+        password: 'DifferentSecurePassword2026!'
+      }),
+      redirect: 'manual'
+    });
+    assert.equal(loginRes.status, 302);
+    const authCookie = loginRes.headers.getSetCookie()
+      .find((value) => value.startsWith('orchestra_auth='))!.split(';')[0]!;
+    const token = decodeURIComponent(authCookie.slice('orchestra_auth='.length));
+    const authDb = (webApp as any).authService.db;
+    authDb.prepare('UPDATE auth_sessions SET expires_at = 0 WHERE token_hash = ?')
+      .run((await import('node:crypto')).createHash('sha256').update(token).digest('base64url'));
+
+    const expiredPage = await fetch(`${webBaseUrl}/settings`, {
+      headers: { Cookie: authCookie },
+      redirect: 'manual'
+    });
+    assert.equal(expiredPage.status, 302);
+    const expiredApi = await fetch(`${webBaseUrl}/api/auth/me`, {
+      headers: { Cookie: authCookie }
+    });
+    assert.equal(expiredApi.status, 401);
+  });
+
+  test('UI-AUTH-ISOLATION-01: User sessions cannot read another account’s private document', async () => {
+    const first = await webApp.authService.register('first-user@example.com', 'FirstUserPassword2026!');
+    const second = await webApp.authService.register('second-user@example.com', 'SecondUserPassword2026!');
+    assert.equal(webApp.authService.verifyEmailToken(first.verificationToken), true);
+    assert.equal(webApp.authService.verifyEmailToken(second.verificationToken), true);
+    const firstSession = webApp.authService.createSession(
+      first.user.id,
+      webApp.integrationService.createSessionId()
+    );
+    const secondSession = webApp.authService.createSession(
+      second.user.id,
+      webApp.integrationService.createSessionId()
+    );
+    const firstCookie = `orchestra_auth=${firstSession.token}`;
+    const secondCookie = `orchestra_auth=${secondSession.token}`;
+    const upload = await fetch(`${webBaseUrl}/api/knowledge`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: firstCookie
+      },
+      body: JSON.stringify({ title: 'Private account note', content: 'Only account one may read this.' })
+    });
+    assert.equal(upload.status, 201);
+    const created = await upload.json() as { document: { id: string } };
+    const ownRead = await fetch(`${webBaseUrl}/api/knowledge/${created.document.id}`, {
+      headers: { Cookie: firstCookie }
+    });
+    assert.equal(ownRead.status, 200);
+    const otherRead = await fetch(`${webBaseUrl}/api/knowledge/${created.document.id}`, {
+      headers: { Cookie: secondCookie }
+    });
+    assert.equal(otherRead.status, 404);
+  });
+
+  test('UI-AUTH-EMAIL-04: User login page renders Continue with Google and no access key field', async () => {
+    const res = await fetch(`${webBaseUrl}/login`);
+    assert.equal(res.status, 200);
+    const html = await res.text();
+    assert.ok(html.includes('Email address'), 'Login form includes email input');
+    assert.ok(html.includes('Password'), 'Login form includes password input');
+    assert.ok(html.includes('Continue with Google'), 'Login form includes Continue with Google button');
+    assert.ok(html.includes('Create account'), 'Login form includes link to registration');
+    assert.ok(html.includes('Forgot password?'), 'Login form includes link to password reset');
+    assert.ok(!html.includes('App access key'), 'Access key input is removed from login UI');
+
+    const previousGoogleId = process.env.GOOGLE_CLIENT_ID;
+    const previousGoogleSecret = process.env.GOOGLE_CLIENT_SECRET;
+    const previousGoogleRedirect = process.env.GOOGLE_AUTH_REDIRECT_URI;
+    delete process.env.GOOGLE_CLIENT_ID;
+    delete process.env.GOOGLE_CLIENT_SECRET;
+    delete process.env.GOOGLE_AUTH_REDIRECT_URI;
+    try {
+      const failedState = await fetch(`${webBaseUrl}/auth/google/callback?code=unused&state=invalid`, {
+        redirect: 'manual'
+      });
+      assert.equal(failedState.status, 302);
+      assert.match(
+        decodeURIComponent(failedState.headers.get('location') || ''),
+        /Invalid.*authorization session/i
+      );
+      const unavailable = await fetch(`${webBaseUrl}/auth/google`, { redirect: 'manual' });
+      assert.equal(unavailable.status, 302);
+      assert.match(unavailable.headers.get('location') || '', /GOOGLE_AUTH_REDIRECT_URI/);
+    } finally {
+      if (previousGoogleId === undefined) delete process.env.GOOGLE_CLIENT_ID;
+      else process.env.GOOGLE_CLIENT_ID = previousGoogleId;
+      if (previousGoogleSecret === undefined) delete process.env.GOOGLE_CLIENT_SECRET;
+      else process.env.GOOGLE_CLIENT_SECRET = previousGoogleSecret;
+      if (previousGoogleRedirect === undefined) delete process.env.GOOGLE_AUTH_REDIRECT_URI;
+      else process.env.GOOGLE_AUTH_REDIRECT_URI = previousGoogleRedirect;
     }
   });
 
@@ -837,6 +1303,7 @@ describe('ORCHESTRA Phase 5.1 — UI/Backend Integration & Security Audit', () =
     const uploadData = await uploadRes.json() as any;
     assert.equal(uploadData.success, true);
     assert.equal(uploadData.document.title, 'Q4_Financial_Update.pdf');
+    privateDocumentId = uploadData.document.id;
 
     // 4. Test POST /api/missions with full parameters
     const missionRes = await fetch(`${webBaseUrl}/api/missions`, {
@@ -899,7 +1366,7 @@ describe('ORCHESTRA Phase 5.1 — UI/Backend Integration & Security Audit', () =
     assert.ok(html.includes('Analyze this data and generate a report.'), 'Card 5 quote must exist');
 
     assert.ok(html.includes('Use my tools'), 'Card 6 title must exist');
-    assert.ok(html.includes('Find documents in Drive, check my Notion, and summarize.'), 'Card 6 quote must exist');
+    assert.ok(html.includes('Find documents in my authorized Google Drive and summarize them.'), 'Card 6 quote must describe an implemented provider');
     assert.ok(html.includes('handlePresetClick(this)'), 'Cards must bind handlePresetClick');
     assert.ok(html.includes('data-goal='), 'Cards must define data-goal attributes');
 
@@ -921,6 +1388,16 @@ describe('ORCHESTRA Phase 5.1 — UI/Backend Integration & Security Audit', () =
     assert.equal(missionsRes.status, 200, 'GET /api/missions must return 200 OK');
     const missionsData = (await missionsRes.json()) as any;
     assert.ok(Array.isArray(missionsData.missions), 'Missions must be an array');
+    const otherSessionRes = await fetch(`${webBaseUrl}/api/missions`, {
+      headers: { cookie: 'orchestra_session=invalid' }
+    });
+    const otherSessionData = await otherSessionRes.json() as any;
+    assert.equal(otherSessionData.missions.length, 0, 'Another browser session must not see owned missions');
+    assert.ok(privateDocumentId);
+    const privateDocumentRes = await fetch(`${webBaseUrl}/api/knowledge?id=${privateDocumentId}`, {
+      headers: { cookie: 'orchestra_session=invalid' }
+    });
+    assert.equal(privateDocumentRes.status, 404, 'Another browser session must not read private uploaded documents');
 
     // 2. GET /api/knowledge
     const knowRes = await fetch(`${webBaseUrl}/api/knowledge`);
@@ -934,50 +1411,42 @@ describe('ORCHESTRA Phase 5.1 — UI/Backend Integration & Security Audit', () =
     assert.equal(intRes.status, 200, 'GET /api/integrations must return 200 OK');
     const intData = (await intRes.json()) as any;
     assert.ok(Array.isArray(intData.integrations), 'Integrations must be an array');
-    assert.equal(intData.integrations.length, 9, 'Must return exactly 9 canonical integrations');
+    assert.equal(intData.integrations.length, 4, 'Only real Google and GitHub provider integrations are listed');
+    assert.ok(intData.integrations.every((integration: any) => integration.status !== 'connected'),
+      'No provider is reported as connected without OAuth and a live provider health check');
+    assert.deepEqual(
+      intData.integrations.map((integration: any) => integration.id).sort(),
+      ['github', 'gmail', 'google-calendar', 'google-drive']
+    );
 
     // 4. GET /api/activity
     const actRes = await fetch(`${webBaseUrl}/api/activity`);
     assert.equal(actRes.status, 200, 'GET /api/activity must return 200 OK');
     const actData = (await actRes.json()) as any;
     assert.ok(Array.isArray(actData.activities), 'Activity logs must be an array');
-    assert.ok(actData.activities.length > 0, 'Must contain seeded activity events');
+    assert.ok(actData.activities.length > 0, 'Must contain activity events owned by this browser session');
   });
 
-  test('UI-DB-AUDIT-01: Database & Persistence Audit (SQLite CRUD for knowledge documents, integration toggles and reset, activity logging)', async () => {
-    // 1. Toggle integration status dynamically in SQLite
+  test('UI-DB-AUDIT-01: Local integration status toggles are rejected; knowledge persistence remains available', async () => {
+    // 1. Fake local toggles must no longer create a connected provider state.
     const toggleRes = await fetch(`${webBaseUrl}/api/integrations/google-calendar/toggle`, {
       method: 'POST'
     });
-    assert.equal(toggleRes.status, 200, 'Toggle integration must return 200 OK');
-    const toggleData = (await toggleRes.json()) as any;
-    assert.ok(toggleData.success, 'Toggle must succeed');
-    assert.equal(toggleData.integration.connected, 1, 'Google Calendar must now be connected (1) in SQLite');
+    assert.equal(toggleRes.status, 410, 'Fake connection toggles are gone');
 
-    // 2. Verify persistence on GET /api/integrations
+    // 2. Status is sourced from real OAuth state, never a local toggle.
     const verifyRes = await fetch(`${webBaseUrl}/api/integrations`);
     const verifyData = (await verifyRes.json()) as any;
     const gCal = verifyData.integrations.find((i: any) => i.id === 'google-calendar');
-    assert.equal(gCal.connected, 1, 'SQLite persistence confirmed for Google Calendar');
+    assert.equal(gCal.status, 'not_connected');
 
-    // 3. Verify activity event was recorded for integration toggle
-    const actRes = await fetch(`${webBaseUrl}/api/activity?filter=integration`);
-    assert.equal(actRes.status, 200);
-    const actData = (await actRes.json()) as any;
-    const hasToggleActivity = actData.activities.some((a: any) => a.title.includes('Google Calendar'));
-    assert.ok(hasToggleActivity, 'Activity log must record integration status change');
-
-    // 4. Reset integrations back to disconnected in SQLite
+    // 3. Bulk reset cannot erase OAuth connections without explicit revocation.
     const resetRes = await fetch(`${webBaseUrl}/api/integrations/reset`, {
       method: 'POST'
     });
-    assert.equal(resetRes.status, 200);
-    const resetData = (await resetRes.json()) as any;
-    assert.ok(resetData.success);
-    const resetGCal = resetData.integrations.find((i: any) => i.id === 'google-calendar');
-    assert.equal(resetGCal.connected, 0, 'Google Calendar must be reset to disconnected (0) in SQLite');
+    assert.equal(resetRes.status, 410);
 
-    // 5. Ingest knowledge document via POST /api/knowledge
+    // 4. Ingest knowledge document via POST /api/knowledge
     const uploadRes = await fetch(`${webBaseUrl}/api/knowledge`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -994,24 +1463,21 @@ describe('ORCHESTRA Phase 5.1 — UI/Backend Integration & Security Audit', () =
     assert.ok(uploadData.success);
     assert.equal(uploadData.document.title, 'Backend Audit Architecture 2026');
 
-    // 6. Verify knowledge document persisted in SQLite query
+    // 5. Verify knowledge document persisted in SQLite query
     const docQueryRes = await fetch(`${webBaseUrl}/api/knowledge?id=${uploadData.document.id}`);
     assert.equal(docQueryRes.status, 200);
     const docQueryData = (await docQueryRes.json()) as any;
     assert.equal(docQueryData.document.title, 'Backend Audit Architecture 2026');
   });
 
-  test('UI-DYNAMIC-01: Dynamic API verification (Integrations PATCH, Knowledge Hub details & insights, Activity KPI stats & Top Tools)', async () => {
-    // 1. Dynamic Integrations PATCH
+  test('UI-DYNAMIC-01: Removed local integration mutations; Knowledge Hub and Activity remain dynamic', async () => {
+    // 1. A legacy local status mutation cannot claim a provider account.
     const patchRes = await fetch(`${webBaseUrl}/api/integrations/slack`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ connected: true })
     });
-    assert.equal(patchRes.status, 200, 'PATCH /api/integrations/slack must return 200 OK');
-    const patchData = (await patchRes.json()) as any;
-    assert.ok(patchData.success);
-    assert.equal(patchData.integration.connected, 1, 'Slack must be marked connected in SQLite');
+    assert.equal(patchRes.status, 404, 'Unsupported placeholder integrations are not exposed');
 
     // 2. Dynamic Knowledge Hub Details & Insights (/api/knowledge/:id)
     const docRes = await fetch(`${webBaseUrl}/api/knowledge/doc-q4-roadmap`);
@@ -1034,8 +1500,9 @@ describe('ORCHESTRA Phase 5.1 — UI/Backend Integration & Security Audit', () =
     assert.ok(typeof actData.stats.integrationsCount === 'number', 'integrationsCount must be a number');
     assert.ok(actData.stats.categoryCounts, 'Must return category breakdown counts');
     assert.ok(Array.isArray(actData.stats.topTools), 'topTools must be an array');
-    assert.ok(actData.stats.topTools.length > 0, 'topTools must have entries with progress metrics');
-    assert.ok(typeof actData.stats.topTools[0].percent === 'number', 'top tool must have calculated percent');
+    if (actData.stats.topTools.length > 0) {
+      assert.ok(typeof actData.stats.topTools[0].percent === 'number', 'top tool must have calculated percent');
+    }
   });
 
   // =========================================================================

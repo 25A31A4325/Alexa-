@@ -1,8 +1,15 @@
 import { renderLayout } from '../components/layout.js';
 import { OrchestratorDatabase } from '@orchestra/orchestrator';
 
-export function renderMissionsListPage(db: OrchestratorDatabase): string {
-  const missions = (db as any).db.prepare('SELECT * FROM missions ORDER BY created_at DESC').all();
+export function renderMissionsListPage(db: OrchestratorDatabase, ownerSessionId?: string): string {
+  const missions = ownerSessionId
+    ? (db as any).db.prepare(`
+        SELECT m.* FROM missions m
+        JOIN mission_owners o ON o.mission_id = m.id
+        WHERE o.owner_session_id = ?
+        ORDER BY m.created_at DESC
+      `).all(ownerSessionId)
+    : [];
 
   const bodyContent = `
     <div class="max-w-6xl mx-auto space-y-6 relative">

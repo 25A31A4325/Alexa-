@@ -116,6 +116,7 @@ export class ToolDatabase {
         action_items_json TEXT NOT NULL,
         content TEXT NOT NULL,
         is_local_demo INTEGER NOT NULL DEFAULT 1,
+        owner_session_id TEXT,
         created_at TEXT NOT NULL
       );
 
@@ -190,6 +191,10 @@ export class ToolDatabase {
         updated_at TEXT NOT NULL
       );
     `);
+    const documentColumns = this.db.prepare('PRAGMA table_info(knowledge_documents)').all() as Array<{ name: string }>;
+    if (!documentColumns.some((column) => column.name === 'owner_session_id')) {
+      this.db.exec('ALTER TABLE knowledge_documents ADD COLUMN owner_session_id TEXT');
+    }
   }
 
   public seedDemoCalendar(): void {
@@ -354,9 +359,9 @@ export class ToolDatabase {
   }
 
   // --- Knowledge Methods ---
-  public searchKnowledge(query: string, category: string = 'all', limit: number = 5): KnowledgeDocumentRow[] {
-    let sql = 'SELECT * FROM knowledge_documents WHERE 1=1';
-    const params: (string | number)[] = [];
+  public searchKnowledge(query: string, category: string = 'all', limit: number = 5, ownerSessionId?: string): KnowledgeDocumentRow[] {
+    let sql = 'SELECT * FROM knowledge_documents WHERE (is_local_demo = 1 OR owner_session_id = ?)';
+    const params: (string | number | null)[] = [ownerSessionId || null];
 
     if (category !== 'all') {
       sql += ' AND category = ?';
@@ -375,8 +380,11 @@ export class ToolDatabase {
     return this.db.prepare(sql).all(...params) as unknown as KnowledgeDocumentRow[];
   }
 
-  public getDocument(id: string): KnowledgeDocumentRow | undefined {
-    return this.db.prepare('SELECT * FROM knowledge_documents WHERE id = ?').get(id) as unknown as KnowledgeDocumentRow | undefined;
+  public getDocument(id: string, ownerSessionId?: string): KnowledgeDocumentRow | undefined {
+    return this.db.prepare(`
+      SELECT * FROM knowledge_documents
+      WHERE id = ? AND (is_local_demo = 1 OR owner_session_id = ?)
+    `).get(id, ownerSessionId || null) as unknown as KnowledgeDocumentRow | undefined;
   }
 
   // --- Task Methods ---

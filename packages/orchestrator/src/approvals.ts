@@ -5,6 +5,10 @@ import { ApprovalRow } from './types.js';
 export const CONSEQUENTIAL_ACTIONS = new Set<string>([
   'calendar_create_reminder',
   'calendar_create_event',
+  'google_calendar_create_event',
+  'google_calendar_update_event',
+  'gmail_send',
+  'github_create_issue',
   'send_notification',
   'email_checklist',
   'delete_data'

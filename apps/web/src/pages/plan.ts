@@ -1,8 +1,18 @@
 import { renderLayout } from '../components/layout.js';
 import { OrchestratorDatabase } from '@orchestra/orchestrator';
 
-export function renderPlanPage(db: OrchestratorDatabase): string {
-  const missions = (db as any).db ? (db as any).db.prepare('SELECT * FROM missions ORDER BY created_at DESC LIMIT 10').all() : [];
+export function renderPlanPage(
+  db: OrchestratorDatabase,
+  ownerSessionId?: string,
+  integrationStatuses: Array<{ id: string; status: string }> = []
+): string {
+  const missions = ownerSessionId
+    ? (db as any).db.prepare(`
+        SELECT m.* FROM missions m
+        JOIN mission_owners o ON o.mission_id = m.id
+        WHERE o.owner_session_id = ? ORDER BY m.created_at DESC LIMIT 10
+      `).all(ownerSessionId)
+    : [];
   const activeMission = missions.find((m: any) => m.goal && (m.goal.toLowerCase().includes('roadmap') || m.goal.toLowerCase().includes('investor') || m.goal.toLowerCase().includes('meeting') || m.goal.toLowerCase().includes('product')))
     || missions.find((m: any) => m.status === 'PLANNING' || m.status === 'EXECUTING' || m.status === 'AWAITING_APPROVAL')
     || missions[0];
@@ -38,10 +48,10 @@ export function renderPlanPage(db: OrchestratorDatabase): string {
   ];
 
   const services = [
-    { name: 'Google Calendar', icon: '📆', connected: true },
-    { name: 'Gmail', icon: '✉️', connected: true },
-    { name: 'Notion', icon: '📓', connected: true },
-    { name: 'Google Drive', icon: '📁', connected: true }
+    { id: 'google-calendar', name: 'Google Calendar', icon: '📆' },
+    { id: 'gmail', name: 'Gmail', icon: '✉️' },
+    { id: 'google-drive', name: 'Google Drive', icon: '📁' },
+    { id: 'github', name: 'GitHub', icon: '🐙' }
   ];
 
   const bodyContent = `
@@ -193,18 +203,24 @@ export function renderPlanPage(db: OrchestratorDatabase): string {
             </div>
 
             <div class="grid grid-cols-2 gap-2.5">
-              ${services.map(s => `
+              ${services.map(s => {
+                const status = integrationStatuses.find((integration) => integration.id === s.id)?.status || 'not_connected';
+                const connected = status === 'connected';
+                const statusClass = connected ? 'text-emerald-600' : status === 'error' || status === 'expired' ? 'text-rose-600' : 'text-slate-500';
+                const dotClass = connected ? 'bg-emerald-500' : status === 'error' || status === 'expired' ? 'bg-rose-500' : 'bg-slate-400';
+                return `
                 <div class="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center gap-2.5">
                   <span class="text-base">${s.icon}</span>
                   <div class="min-w-0">
                     <span class="text-xs font-bold text-slate-800 block truncate">${s.name}</span>
-                    <span class="text-[10px] text-emerald-600 font-semibold flex items-center gap-1">
-                      <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                      Connected
+                    <span class="text-[10px] ${statusClass} font-semibold flex items-center gap-1">
+                      <span class="w-1.5 h-1.5 rounded-full ${dotClass}"></span>
+                      ${status.replace('_', ' ')}
                     </span>
                   </div>
                 </div>
-              `).join('')}
+              `;
+              }).join('')}
             </div>
           </div>
 

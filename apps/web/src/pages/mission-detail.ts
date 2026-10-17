@@ -16,7 +16,7 @@ export function ensureDemoMeetingPrep(db: OrchestratorDatabase) {
     const demoTasks = [
       {
         id: `t-demo-1`,
-        title: 'Connected to your calendar...',
+        title: 'Sample local calendar event (demo)',
         toolName: 'calendar_read_events',
         toolInputTemplate: JSON.stringify({ range: 'tomorrow' }),
         status: 'in_progress',
@@ -151,6 +151,18 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
   const invocations = db.getToolInvocationsForMission(missionId);
   const pendingApproval = (db as any).db.prepare("SELECT * FROM approvals WHERE mission_id = ? AND status = 'pending'").get(missionId);
   const verification = db.getVerificationResult(missionId);
+  const confidenceLabel = verification
+    ? `${Math.round(verification.confidence_score * 100)}%`
+    : 'Not verified';
+  const exportDataJson = JSON.stringify({
+    missionId,
+    goal: mission.goal,
+    status: mission.status,
+    tasks: dbTasks.map((task: any) => ({ title: task.title, status: task.status, toolName: task.tool_name })),
+    verification: verification
+      ? { isValid: verification.is_valid === 1, confidenceScore: verification.confidence_score, summary: verification.summary }
+      : null
+  }).replace(/</g, '\\u003c');
 
   const activeInvocation = invocations.length > 0 ? invocations[invocations.length - 1] : null;
   const toolNameDisplay = activeInvocation ? (activeInvocation.tool_name === 'search_knowledge' ? 'Document Analysis' : activeInvocation.tool_name) : 'Document Analysis';
@@ -795,7 +807,7 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
                 <p class="text-xs text-slate-500">Verification engine checking output validity and contract criteria.</p>
               </div>
             </div>
-            <span class="text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-full">Confidence Score: 94%</span>
+            <span class="text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-full">Confidence Score: ${confidenceLabel}</span>
           </div>
 
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
@@ -983,7 +995,7 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
         <div class="tool-card p-3.5 bg-slate-50 rounded-xl border border-slate-200 hover:border-blue-300 transition" data-tool-name="calendar_read_events">
           <div class="flex items-start justify-between gap-2 mb-1">
             <span class="font-mono text-xs font-bold text-slate-900">calendar_read_events</span>
-            <span class="text-[10px] font-semibold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full">Connected</span>
+            <span class="text-[10px] font-semibold bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full">Requires OAuth</span>
           </div>
           <p class="text-xs text-slate-600 leading-snug">Read user's calendar schedule, agenda, attendees, and meeting details.</p>
           <div class="mt-2 text-[10px] font-mono text-slate-500 bg-white p-2 rounded border border-slate-200">
@@ -1817,14 +1829,7 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
       }
 
       function exportResultsJSON() {
-        const data = {
-          mission: "Meeting Preparation",
-          meeting: "Product Roadmap Discussion",
-          date: "Tomorrow 10:00 AM",
-          status: "${mission.status}",
-          tasks: 7,
-          confidenceScore: 0.94
-        };
+        const data = ${exportDataJson};
         const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');

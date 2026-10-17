@@ -1,10 +1,25 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { createHmac } from 'node:crypto';
+import type { McpApprovalContext } from '@orchestra/mcp-server';
+
+export interface McpRequestContext {
+  sessionId?: string;
+  approval?: McpApprovalContext;
+}
+
+const requestContext = new AsyncLocalStorage<McpRequestContext>();
+
+export function withMcpRequestContext<T>(context: McpRequestContext, callback: () => T): T {
+  return requestContext.run({ ...requestContext.getStore(), ...context }, callback);
+}
 
 export interface McpClientConfig {
   serverUrl?: string;
   clientName?: string;
   clientVersion?: string;
+  sessionSecret?: string;
 }
 
 export interface DiscoveredTool {
@@ -29,9 +44,11 @@ export class OrchestraMcpClient {
   private client: Client;
   private transport: StreamableHTTPClientTransport | null = null;
   private serverUrl: string;
+  private sessionSecret: string;
 
   constructor(config: McpClientConfig = {}) {
     this.serverUrl = config.serverUrl || process.env.MCP_SERVER_URL || 'http://127.0.0.1:3001/mcp';
+    this.sessionSecret = config.sessionSecret || process.env.SESSION_SECRET || '';
     this.client = new Client({
       name: config.clientName || 'orchestra-client',
       version: config.clientVersion || '1.0.0'
@@ -43,13 +60,31 @@ export class OrchestraMcpClient {
       return;
     }
     const url = new URL(this.serverUrl);
+    const authenticatedFetch: typeof fetch = async (input, init) => {
+      const context = requestContext.getStore();
+      const headers = new Headers(input instanceof Request ? input.headers : undefined);
+      new Headers(init?.headers).forEach((value, key) => headers.set(key, value));
+      if (context?.sessionId && this.sessionSecret.length >= 32) {
+        const approvalPayload = context.approval
+          ? Buffer.from(JSON.stringify(context.approval)).toString('base64url')
+          : '';
+        const signature = createHmac('sha256', this.sessionSecret)
+          .update(`${context.sessionId}\n${approvalPayload}`)
+          .digest('base64url');
+        headers.set('x-orchestra-user-session', context.sessionId);
+        headers.set('x-orchestra-approval', approvalPayload);
+        headers.set('x-orchestra-context-signature', signature);
+      }
+      return fetch(input, { ...init, headers });
+    };
     const transport = new StreamableHTTPClientTransport(url, {
       requestInit: {
         headers: {
           'Accept': 'text/event-stream, application/json',
           'Content-Type': 'application/json'
         }
-      }
+      },
+      fetch: authenticatedFetch
     });
     try {
       await this.client.connect(transport);

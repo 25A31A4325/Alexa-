@@ -113,6 +113,76 @@ export function classifyTool(toolName: string): {
       consequential: true,
       category: 'Data'
     },
+    gmail_search: {
+      classification: 'Read-Only (Requires Gmail OAuth)',
+      consequential: false,
+      category: 'Communication'
+    },
+    gmail_read_message: {
+      classification: 'Read-Only (Requires Gmail OAuth)',
+      consequential: false,
+      category: 'Communication'
+    },
+    google_calendar_list_events: {
+      classification: 'Read-Only (Requires Calendar OAuth)',
+      consequential: false,
+      category: 'Calendar'
+    },
+    google_calendar_check_availability: {
+      classification: 'Read-Only (Requires Calendar OAuth)',
+      consequential: false,
+      category: 'Calendar'
+    },
+    google_drive_search: {
+      classification: 'Read-Only (Requires Drive OAuth)',
+      consequential: false,
+      category: 'Knowledge'
+    },
+    google_drive_read_file: {
+      classification: 'Read-Only (Requires Drive OAuth)',
+      consequential: false,
+      category: 'Knowledge'
+    },
+    github_list_repositories: {
+      classification: 'Read-Only (Requires GitHub OAuth)',
+      consequential: false,
+      category: 'Development'
+    },
+    github_search_repositories: {
+      classification: 'Read-Only (Requires GitHub OAuth)',
+      consequential: false,
+      category: 'Development'
+    },
+    github_search_code: {
+      classification: 'Read-Only (Requires GitHub OAuth)',
+      consequential: false,
+      category: 'Development'
+    },
+    github_read_repository_file: {
+      classification: 'Read-Only (Requires GitHub OAuth)',
+      consequential: false,
+      category: 'Development'
+    },
+    gmail_send: {
+      classification: 'Consequential Action (Approval-Gated Gmail Send)',
+      consequential: true,
+      category: 'Communication'
+    },
+    google_calendar_create_event: {
+      classification: 'Consequential Action (Approval-Gated Calendar Event)',
+      consequential: true,
+      category: 'Calendar'
+    },
+    google_calendar_update_event: {
+      classification: 'Consequential Action (Approval-Gated Calendar Update)',
+      consequential: true,
+      category: 'Calendar'
+    },
+    github_create_issue: {
+      classification: 'Consequential Action (Approval-Gated GitHub Issue)',
+      consequential: true,
+      category: 'Development'
+    },
     verify_action: {
       classification: 'Consequential Policy Gate',
       consequential: true,
@@ -126,8 +196,8 @@ export function classifyTool(toolName: string): {
 
   // Strict fallback when classification is absent
   return {
-    classification: 'Classification unavailable',
-    consequential: false,
+    classification: 'Blocked until classified',
+    consequential: true,
     category: 'Unclassified'
   };
 }

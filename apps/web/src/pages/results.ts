@@ -1,14 +1,28 @@
 import { renderLayout } from '../components/layout.js';
 import { OrchestratorDatabase } from '@orchestra/orchestrator';
 
-export function renderResultsPage(db: OrchestratorDatabase): string {
-  const missions = (db as any).db ? (db as any).db.prepare('SELECT * FROM missions ORDER BY created_at DESC LIMIT 10').all() : [];
+export function renderResultsPage(db: OrchestratorDatabase, ownerSessionId?: string): string {
+  const missions = ownerSessionId
+    ? (db as any).db.prepare(`
+        SELECT m.* FROM missions m
+        JOIN mission_owners o ON o.mission_id = m.id
+        WHERE o.owner_session_id = ? ORDER BY m.created_at DESC LIMIT 10
+      `).all(ownerSessionId)
+    : [];
   const completedMissions = missions.filter((m: any) => m.status === 'COMPLETED');
   const activeMission = completedMissions[0] || (missions.length > 0 ? missions[0] : null);
-  const missionId = activeMission ? activeMission.id : 'demo-meeting-prep';
-  const verification = db.getVerificationResult(missionId);
-  const confidenceScore = verification ? Math.round(verification.confidence_score * 100) : 94;
-  const missionSummaryText = verification ? verification.summary : 'Autonomous preparation briefing generated, verified, and cross-referenced in 24 seconds.';
+  const verification = activeMission ? db.getVerificationResult(activeMission.id) : undefined;
+  const isVerifiedCompletion = activeMission?.status === 'COMPLETED' && verification?.is_valid === 1;
+  const confidenceScore = verification ? Math.round(verification.confidence_score * 100) : null;
+  const missionSummaryText = verification?.summary || 'No verified mission results are available for this browser session yet.';
+  const exportDataJson = JSON.stringify({
+    missionId: activeMission?.id || null,
+    goal: activeMission?.goal || null,
+    status: activeMission?.status || 'NO_MISSION',
+    verification: verification
+      ? { isValid: verification.is_valid === 1, confidenceScore: verification.confidence_score, summary: verification.summary }
+      : null
+  }).replace(/</g, '\\u003c');
 
   const bodyContent = `
     <div class="max-w-6xl mx-auto space-y-6">
@@ -44,9 +58,9 @@ export function renderResultsPage(db: OrchestratorDatabase): string {
           </div>
           <div>
             <div class="flex items-center gap-2.5">
-              <h1 class="text-xl font-bold text-slate-900 tracking-tight">Your request is complete!</h1>
+              <h1 class="text-xl font-bold text-slate-900 tracking-tight">${isVerifiedCompletion ? 'Your request is complete!' : 'No verified results yet'}</h1>
               <span class="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
-                Score: ${confidenceScore}%
+                ${confidenceScore === null ? 'Not verified' : `Score: ${confidenceScore}%`}
               </span>
             </div>
             <p class="text-xs text-slate-500 mt-1">${missionSummaryText}</p>
@@ -57,9 +71,9 @@ export function renderResultsPage(db: OrchestratorDatabase): string {
           <button type="button" onclick="exportResultsJSON()" class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl text-xs border border-slate-200 transition shadow-2xs flex items-center gap-1.5 cursor-pointer">
             <span>⬇ Export</span>
           </button>
-          <button type="button" onclick="saveToNotionSim()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs transition shadow-xs flex items-center gap-1.5 cursor-pointer">
-            <span>📓 Save to Notion</span>
-          </button>
+          <a href="/integrations" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs transition shadow-xs flex items-center gap-1.5">
+            <span>🔌 Manage Integrations</span>
+          </a>
         </div>
       </div>
 
@@ -319,18 +333,7 @@ export function renderResultsPage(db: OrchestratorDatabase): string {
       }
 
       function exportResultsJSON() {
-        const data = {
-          title: "Product Roadmap Discussion Meeting Prep",
-          status: "COMPLETE",
-          confidenceScore: 0.94,
-          agenda: "Q1 Feature Milestones, Resource Allocation, Budget Approvals",
-          checklist: [
-            "Review Q1 Roadmap slides (pages 3-7)",
-            "Confirm headcount numbers with Engineering Lead",
-            "Prepare talking points on budget contingency",
-            "Confirm attendance with Stakeholder Sync team"
-          ]
-        };
+        const data = ${exportDataJson};
         const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -339,10 +342,6 @@ export function renderResultsPage(db: OrchestratorDatabase): string {
         a.click();
         URL.revokeObjectURL(url);
         window.showToast ? window.showToast('Exported results to JSON file', 'success', '⬇') : showResultsToast('Exported results to JSON file');
-      }
-
-      function saveToNotionSim() {
-        window.showToast ? window.showToast('Meeting briefing synchronized to your Notion workspace!', 'success', '📓') : showResultsToast('📓 Meeting preparation briefing saved to your Notion workspace!');
       }
 
       function startTaskSim(btn, taskName) {

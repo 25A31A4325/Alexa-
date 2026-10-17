@@ -152,17 +152,29 @@ function getCategoryMeta(eventType: string, title?: string): {
   };
 }
 
-export function renderActivityPage(db: OrchestratorDatabase, _filter?: string): string {
+export function renderActivityPage(
+  db: OrchestratorDatabase,
+  _filter?: string,
+  ownerSessionId?: string,
+  integrationsCount = 0
+): string {
   // Query SQLite activity events
   let events: any[] = [];
   try {
-    events = (db as any).db.prepare('SELECT * FROM activity_events ORDER BY created_at DESC LIMIT 100').all() as any[];
+    events = ownerSessionId
+      ? (db as any).db.prepare(`
+          SELECT a.* FROM activity_events a
+          WHERE a.owner_session_id = ?
+             OR a.mission_id IN (SELECT mission_id FROM mission_owners WHERE owner_session_id = ?)
+          ORDER BY a.created_at DESC LIMIT 100
+        `).all(ownerSessionId, ownerSessionId) as any[]
+      : (db as any).db.prepare('SELECT * FROM activity_events ORDER BY created_at DESC LIMIT 100').all() as any[];
   } catch {
     events = [];
   }
 
   // Fallback seed if database has 0 events
-  if (events.length === 0) {
+  if (events.length === 0 && !ownerSessionId) {
     events = [
       {
         id: 'act-seed-8',
@@ -228,7 +240,7 @@ export function renderActivityPage(db: OrchestratorDatabase, _filter?: string): 
         created_at: '2026-10-10T22:12:00.000Z'
       }
     ];
-  } else {
+  } else if (!ownerSessionId) {
     // If events exist but Product Requirements is not in list, ensure it is included
     const hasPRD = events.some(e => (e.title || '').toLowerCase().includes('requirement'));
     if (!hasPRD) {
@@ -243,21 +255,29 @@ export function renderActivityPage(db: OrchestratorDatabase, _filter?: string): 
   }
 
   // Calculate live database counts
-  let liveToolCalls = 0;
-  let liveMissionsCount = 0;
-  let liveTotalEvents = events.length;
+  const eventScope = ownerSessionId
+    ? ` WHERE owner_session_id = ? OR mission_id IN (
+          SELECT mission_id FROM mission_owners WHERE owner_session_id = ?
+        )`
+    : '';
+  const eventCountParams = ownerSessionId ? [ownerSessionId, ownerSessionId] : [];
+  const liveTotalEvents = (db as any).db.prepare(`
+    SELECT COUNT(*) AS count FROM activity_events${eventScope}
+  `).get(...eventCountParams)?.count || 0;
+  const missionScope = ownerSessionId
+    ? ' WHERE mission_id IN (SELECT mission_id FROM mission_owners WHERE owner_session_id = ?)'
+    : '';
+  const missionParams = ownerSessionId ? [ownerSessionId] : [];
+  const liveToolCalls = (db as any).db.prepare(`
+    SELECT COUNT(*) AS count FROM tool_invocation_records${missionScope}
+  `).get(...missionParams)?.count || 0;
+  const liveMissionsCount = ownerSessionId
+    ? (db as any).db.prepare('SELECT COUNT(*) AS count FROM mission_owners WHERE owner_session_id = ?').get(ownerSessionId)?.count || 0
+    : (db as any).db.prepare('SELECT COUNT(*) AS count FROM missions').get()?.count || 0;
 
-  try {
-    liveToolCalls = (db as any).db.prepare('SELECT COUNT(*) as count FROM tool_invocation_records').get()?.count || 0;
-    liveMissionsCount = (db as any).db.prepare('SELECT COUNT(*) as count FROM missions').get()?.count || 0;
-  } catch {
-    // Defaults handled below
-  }
-
-  const totalActivitiesCount = Math.max(24, liveTotalEvents);
-  const missionsCount = Math.max(8, liveMissionsCount);
-  const toolActionsCount = Math.max(12, liveToolCalls);
-  const integrationsCount = 3;
+  const totalActivitiesCount = liveTotalEvents;
+  const missionsCount = liveMissionsCount;
+  const toolActionsCount = liveToolCalls;
 
   // Render Timeline Items with interactive buttons, hover states, and slide-over triggers
   const timelineItemsHtml = events.map((item) => {
@@ -501,12 +521,12 @@ export function renderActivityPage(db: OrchestratorDatabase, _filter?: string): 
               </div>
               <span class="text-xs font-semibold text-slate-600">Integrations</span>
             </div>
-            <span class="text-[11px] font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-100">Connected</span>
+            <span class="text-[11px] font-bold ${integrationsCount > 0 ? 'text-emerald-600 bg-emerald-50 border-emerald-100' : 'text-slate-500 bg-slate-100 border-slate-200'} px-2 py-0.5 rounded-md border">${integrationsCount > 0 ? 'Connected' : 'None connected'}</span>
           </div>
           <div class="flex items-end justify-between mt-3">
             <div>
               <span id="kpi-integrations" class="text-2xl font-black text-slate-900">${integrationsCount}</span>
-              <span class="text-[11px] text-slate-400 block mt-0.5">Services active in DB</span>
+              <span class="text-[11px] text-slate-400 block mt-0.5">Provider health checks</span>
             </div>
             <!-- Orange smooth sparkline -->
             <svg class="w-24 h-9 overflow-visible" viewBox="0 0 100 36" fill="none">

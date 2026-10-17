@@ -165,14 +165,14 @@ export function renderNewConversationPage(): string {
           <button type="button" 
                   class="preset-card-btn bg-white hover:bg-slate-50/90 border border-slate-200/90 hover:border-indigo-400 rounded-2xl p-4 text-left transition-all duration-200 shadow-xs hover:shadow-md group flex flex-col justify-between cursor-pointer"
                   data-title="Use my tools"
-                  data-goal="Find documents in Drive, check my Notion, and summarize."
+                  data-goal="Find documents in my authorized Google Drive and summarize them."
                   onclick="handlePresetClick(this)">
             <div>
               <div class="w-9 h-9 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center text-base font-bold shadow-xs mb-3 group-hover:scale-105 transition-transform">
                 <svg class="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"/></svg>
               </div>
               <h3 class="font-bold text-sm text-slate-900 group-hover:text-indigo-600 transition-colors">Use my tools</h3>
-              <p class="text-xs text-slate-500 mt-1.5 leading-relaxed">&ldquo;Find documents in Drive, check my Notion, and summarize.&rdquo;</p>
+              <p class="text-xs text-slate-500 mt-1.5 leading-relaxed">&ldquo;Find documents in my authorized Google Drive and summarize them.&rdquo;</p>
             </div>
             <div class="flex justify-end mt-3">
               <span class="w-6 h-6 rounded-full bg-slate-100 group-hover:bg-indigo-50 text-slate-400 group-hover:text-indigo-600 flex items-center justify-center text-xs font-bold transition-all group-hover:translate-x-0.5">→</span>
@@ -835,10 +835,10 @@ export function renderNewConversationPage(): string {
                   <span>✉️</span>
                   <span>Email Checklist</span>
                 </button>
-                <button type="button" onclick="triggerQuickAction('notion')" class="px-3 py-2 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 hover:text-blue-600 transition flex items-center justify-center gap-1.5 shadow-2xs cursor-pointer">
-                  <span>📓</span>
-                  <span>Save to Notion</span>
-                </button>
+                <a href="/integrations" class="px-3 py-2 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 hover:text-blue-600 transition flex items-center justify-center gap-1.5 shadow-2xs">
+                  <span>🔌</span>
+                  <span>Manage Integrations</span>
+                </a>
               </div>
             </div>
 
@@ -1126,28 +1126,28 @@ export function renderNewConversationPage(): string {
         window.showToast ? window.showToast('📄 Previewing extracted content from ' + filename, 'info', '📄') : showInfoToast('📄 Opening preview for ' + filename);
       }
 
-      function triggerQuickAction(action) {
-        if (action === 'reminder') {
-          const btn = event?.currentTarget;
-          if (btn) {
-            btn.classList.add('border-emerald-300', 'bg-emerald-50', 'text-emerald-700');
-            btn.innerHTML = '<span>✓</span><span>Reminder Set (9:45 AM)</span>';
-          }
-          window.showToast ? window.showToast('📅 Meeting reminder created for tomorrow at 9:45 AM! Added to Google Calendar.', 'success', '📅') : showInfoToast('📅 Meeting reminder created for tomorrow at 9:45 AM!');
-        } else if (action === 'email') {
-          const btn = event?.currentTarget;
-          if (btn) {
-            btn.classList.add('border-blue-300', 'bg-blue-50', 'text-blue-700');
-            btn.innerHTML = '<span>✓</span><span>Brief Emailed</span>';
-          }
-          window.showToast ? window.showToast('✉️ Preparation checklist draft generated and sent to your email!', 'success', '✉️') : showInfoToast('✉️ Checklist email draft generated and sent to your inbox!');
-        } else if (action === 'notion') {
-          const btn = event?.currentTarget;
-          if (btn) {
-            btn.classList.add('border-purple-300', 'bg-purple-50', 'text-purple-700');
-            btn.innerHTML = '<span>✓</span><span>Saved to Notion</span>';
-          }
-          window.showToast ? window.showToast('📓 Synchronized executive briefing to your Notion workspace!', 'success', '📓') : showInfoToast('📓 Briefing exported to your Notion workspace!');
+      async function triggerQuickAction(action) {
+        const goals = {
+          reminder: 'Create a calendar reminder for my meeting and pause for approval before writing it.',
+          email: 'Prepare an email checklist for my meeting and require my approval before sending it.'
+        };
+        const goal = goals[action];
+        if (!goal) {
+          showInfoToast('That quick action is not supported.');
+          return;
+        }
+        try {
+          const response = await fetch('/api/missions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ goal })
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error || 'Could not create the mission.');
+          window.location.href = '/missions/' + encodeURIComponent(result.missionId);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Could not create the mission.';
+          window.showToast ? window.showToast(message, 'error', '⚠️') : showInfoToast(message);
         }
       }
 
@@ -1220,7 +1220,7 @@ export function renderNewConversationPage(): string {
         ],
         'Use my tools': [
           'Discovering integrated tools & connected services...',
-          'Searching connected Drive & Notion repositories...',
+          'Checking Google Drive and GitHub connection status...',
           'Retrieving documents across active integrations...',
           'Cross-analyzing multi-source notes & briefs...',
           'Verifying tool workflows & schedule alignment...',

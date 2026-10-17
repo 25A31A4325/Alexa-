@@ -1,9 +1,11 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
+import { IntegrationService, IntegrationServiceError } from './integrations.js';
+import { getMcpRequestIdentity } from './request-context.js';
 import { ToolDatabase } from './db.js';
 
-export function registerAllTools(server: McpServer, db: ToolDatabase): void {
+export function registerAllTools(server: McpServer, db: ToolDatabase, integrations?: IntegrationService): void {
   // 1. search_knowledge
   server.tool(
     'search_knowledge',
@@ -19,7 +21,8 @@ export function registerAllTools(server: McpServer, db: ToolDatabase): void {
       const query = args.query || '';
       const category = args.category || 'all';
       const limit = args.max_results || args.limit || 5;
-      const docs = db.searchKnowledge(query, category, limit);
+      const ownerSessionId = getMcpRequestIdentity().sessionId || undefined;
+      const docs = db.searchKnowledge(query, category, limit, ownerSessionId);
       const results = docs.map(d => ({
         id: d.id,
         title: d.title,
@@ -27,7 +30,7 @@ export function registerAllTools(server: McpServer, db: ToolDatabase): void {
         relevance: d.id.includes('roadmap') ? 'High' : 'Medium',
         pageCount: d.pages,
         snippet: d.summary,
-        is_local_demo: true as const
+        is_local_demo: d.is_local_demo === 1
       }));
       const res = { results, totalCount: results.length };
       db.logToolInvocation('search_knowledge', { query, category, limit }, res, 'success', Date.now() - start);
@@ -48,7 +51,7 @@ export function registerAllTools(server: McpServer, db: ToolDatabase): void {
     async (args) => {
       const start = Date.now();
       const targetId = args.documentId || args.document_id || 'doc-q4-roadmap';
-      const doc = db.getDocument(targetId);
+      const doc = db.getDocument(targetId, getMcpRequestIdentity().sessionId || undefined);
       if (!doc) {
         const err = { error: `Document '${targetId}' not found in local demonstration store.` };
         db.logToolInvocation('retrieve_document', { documentId: targetId }, err, 'not_found', Date.now() - start);
@@ -66,7 +69,7 @@ export function registerAllTools(server: McpServer, db: ToolDatabase): void {
         pages: doc.pages,
         updatedAt: doc.created_at,
         content: doc.content,
-        is_local_demo: true as const
+        is_local_demo: doc.is_local_demo === 1
       };
       db.logToolInvocation('retrieve_document', { documentId: targetId }, res, 'success', Date.now() - start);
       return {
@@ -106,7 +109,7 @@ export function registerAllTools(server: McpServer, db: ToolDatabase): void {
 
       const contents: string[] = [];
       for (const id of docIds) {
-        const d = db.getDocument(id);
+        const d = db.getDocument(id, getMcpRequestIdentity().sessionId || undefined);
         if (d) {
           contents.push(`[${d.title}]: ${d.content}`);
         }
@@ -500,25 +503,253 @@ export function registerAllTools(server: McpServer, db: ToolDatabase): void {
 
   server.tool(
     'list_connected_services',
-    'Lists configured connector records and local toggle state. External provider authentication is not configured.',
+    'Lists live provider connection state for the authenticated browser session.',
     {},
     async () => {
       const start = Date.now();
-      const services = db.getConnectedServices().map((service) => ({
-        id: service.id,
-        name: service.name,
-        category: service.category,
-        locallyEnabled: Boolean(service.connected),
-        is_local_demo: true
-      }));
+      if (!integrations) {
+        throw new IntegrationServiceError('Provider connection service is unavailable.', 'PROVIDER_UNAVAILABLE', 503);
+      }
+      const sessionId = getMcpRequestIdentity().sessionId;
+      if (!sessionId) {
+        throw new IntegrationServiceError('Connect an authenticated ORCHESTRA browser session before listing provider connections.', 'AUTH_REQUIRED', 401);
+      }
+      const services = await integrations.listStatuses(sessionId);
       const result = {
         services,
         totalCount: services.length,
-        externalProviderAccess: false,
-        is_local_demo: true as const
+        source: 'live-provider-authentication'
       };
-      db.logToolInvocation('list_connected_services', {}, result, 'success', Date.now() - start);
+      db.logToolInvocation('list_connected_services', {}, { totalCount: services.length }, 'success', Date.now() - start);
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     }
   );
+
+  if (integrations) {
+    const userSession = (): string => {
+      const sessionId = getMcpRequestIdentity().sessionId;
+      if (!sessionId) {
+        throw new IntegrationServiceError(
+          'Connect an authenticated ORCHESTRA browser session before accessing provider data.',
+          'AUTH_REQUIRED',
+          401
+        );
+      }
+      return sessionId;
+    };
+
+    const requireApprovedWrite = async (toolName: string, parameters: Record<string, unknown>): Promise<void> => {
+      const sessionId = userSession();
+      const approval = getMcpRequestIdentity().approval;
+      if (!approval || approval.actionType !== toolName) {
+        throw new IntegrationServiceError('This write action requires an approved mission task.', 'APPROVAL_REQUIRED', 403);
+      }
+      await integrations.verifyApprovalAndClaim({
+        sessionId,
+        missionId: approval.missionId,
+        taskId: approval.taskId,
+        actionType: toolName,
+        fingerprint: approval.fingerprint,
+        parameters
+      });
+    };
+
+    server.tool(
+      'gmail_search',
+      'Search the signed-in user’s Gmail mailbox. Requires gmail.readonly authorization.',
+      {
+        query: z.string().min(1),
+        maxResults: z.number().int().min(1).max(100).optional(),
+        pageToken: z.string().optional()
+      },
+      async ({ query, maxResults, pageToken }) => {
+        const result = await integrations.searchGmail(userSession(), query, maxResults, pageToken);
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
+    );
+
+    server.tool(
+      'gmail_read_message',
+      'Read one authorized Gmail message. Requires gmail.readonly authorization.',
+      { messageId: z.string().min(1) },
+      async ({ messageId }) => {
+        const result = await integrations.readGmailMessage(userSession(), messageId);
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
+    );
+
+    server.tool(
+      'gmail_send',
+      'Send an email from the connected Gmail account. Requires gmail.send scope and an approved mission task.',
+      {
+        to: z.string().email(),
+        subject: z.string().min(1),
+        body: z.string().min(1)
+      },
+      async (input) => {
+        await requireApprovedWrite('gmail_send', input);
+        const result = await integrations.sendGmail(userSession(), input);
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
+    );
+
+    server.tool(
+      'google_calendar_list_events',
+      'List events from the signed-in user’s primary Google Calendar.',
+      {
+        timeMin: z.string().datetime().optional(),
+        timeMax: z.string().datetime().optional(),
+        pageToken: z.string().optional(),
+        maxResults: z.number().int().min(1).max(250).optional()
+      },
+      async (input) => {
+        const result = await integrations.listCalendarEvents(userSession(), input);
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
+    );
+
+    server.tool(
+      'google_calendar_check_availability',
+      'Check busy intervals in the signed-in user’s primary Google Calendar.',
+      {
+        timeMin: z.string().datetime(),
+        timeMax: z.string().datetime()
+      },
+      async ({ timeMin, timeMax }) => {
+        const result = await integrations.checkCalendarAvailability(userSession(), timeMin, timeMax);
+        return { content: [{ type: 'text', text: JSON.stringify({ busy: result }, null, 2) }] };
+      }
+    );
+
+    server.tool(
+      'google_calendar_create_event',
+      'Create a Google Calendar event. Requires calendar.events authorization and an approved mission task.',
+      {
+        summary: z.string().min(1),
+        start: z.string().datetime(),
+        end: z.string().datetime(),
+        description: z.string().optional(),
+        attendees: z.array(z.string().email()).optional()
+      },
+      async (input) => {
+        await requireApprovedWrite('google_calendar_create_event', input);
+        const result = await integrations.createCalendarEvent(userSession(), input);
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
+    );
+
+    server.tool(
+      'google_calendar_update_event',
+      'Update a Google Calendar event. Requires calendar.events authorization and an approved mission task.',
+      {
+        eventId: z.string().min(1),
+        summary: z.string().min(1).optional(),
+        start: z.string().datetime().optional(),
+        end: z.string().datetime().optional(),
+        description: z.string().optional()
+      },
+      async (input) => {
+        await requireApprovedWrite('google_calendar_update_event', input);
+        const { eventId, ...patch } = input;
+        const result = await integrations.updateCalendarEvent(userSession(), eventId, patch);
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
+    );
+
+    server.tool(
+      'google_drive_search',
+      'Search authorized Google Drive files by name with pagination.',
+      {
+        query: z.string().min(1),
+        pageToken: z.string().optional(),
+        pageSize: z.number().int().min(1).max(100).optional()
+      },
+      async ({ query, pageToken, pageSize }) => {
+        const result = await integrations.searchDrive(userSession(), query, pageToken, pageSize);
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
+    );
+
+    server.tool(
+      'google_drive_read_file',
+      'Retrieve supported Google Docs, plain text, or Markdown content from authorized Drive files.',
+      { fileId: z.string().min(1) },
+      async ({ fileId }) => {
+        const result = await integrations.readDriveFile(userSession(), fileId);
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
+    );
+
+    server.tool(
+      'github_list_repositories',
+      'List repositories actually accessible to the signed-in GitHub account.',
+      {
+        page: z.number().int().min(1).optional(),
+        perPage: z.number().int().min(1).max(100).optional()
+      },
+      async ({ page, perPage }) => {
+        const result = await integrations.listGitHubRepositories(userSession(), page, perPage);
+        return { content: [{ type: 'text', text: JSON.stringify({ repositories: result }, null, 2) }] };
+      }
+    );
+
+    server.tool(
+      'github_search_repositories',
+      'Search repositories available to the signed-in GitHub account.',
+      {
+        query: z.string().min(1),
+        page: z.number().int().min(1).optional(),
+        perPage: z.number().int().min(1).max(100).optional()
+      },
+      async ({ query, page, perPage }) => {
+        const result = await integrations.searchGitHubRepositories(userSession(), query, page, perPage);
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
+    );
+
+    server.tool(
+      'github_search_code',
+      'Search code in repositories accessible to the signed-in GitHub account.',
+      {
+        query: z.string().min(1),
+        page: z.number().int().min(1).optional(),
+        perPage: z.number().int().min(1).max(100).optional()
+      },
+      async ({ query, page, perPage }) => {
+        const result = await integrations.searchGitHubCode(userSession(), query, page, perPage);
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
+    );
+
+    server.tool(
+      'github_read_repository_file',
+      'Read a file from a repository actually accessible to the signed-in GitHub account.',
+      {
+        owner: z.string().min(1),
+        repo: z.string().min(1),
+        path: z.string().min(1),
+        ref: z.string().optional()
+      },
+      async ({ owner, repo, path, ref }) => {
+        const result = await integrations.readGitHubFile(userSession(), owner, repo, path, ref);
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
+    );
+
+    server.tool(
+      'github_create_issue',
+      'Create a repository issue only when GitHub issue writes are enabled and a mission approval is valid.',
+      {
+        owner: z.string().min(1),
+        repo: z.string().min(1),
+        title: z.string().min(1),
+        body: z.string().optional()
+      },
+      async (input) => {
+        await requireApprovedWrite('github_create_issue', input);
+        const result = await integrations.createGitHubIssue(userSession(), input);
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
+    );
+  }
 }

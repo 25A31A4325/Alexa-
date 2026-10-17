@@ -125,4 +125,3 @@ export interface IntegrationRow {
   config_json: string;
   updated_at: string;
 }
-

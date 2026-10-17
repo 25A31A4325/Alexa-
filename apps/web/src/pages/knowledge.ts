@@ -1,9 +1,23 @@
 import { renderLayout } from '../components/layout.js';
 import { ToolDatabase } from '@orchestra/mcp-server';
 
-export function renderKnowledgePage(toolDb: ToolDatabase, selectedDocId?: string): string {
-  // Query knowledge documents directly from SQLite
-  const docs = (toolDb as any).db.prepare('SELECT * FROM knowledge_documents ORDER BY created_at DESC').all() as any[];
+export function renderKnowledgePage(
+  toolDb: ToolDatabase,
+  selectedDocId?: string,
+  ownerSessionId?: string,
+  integrationStatuses: Array<{ id: string; status: string }> = []
+): string {
+  const providerCards = [
+    { id: 'google-calendar', name: 'Google Calendar', icon: '📅' },
+    { id: 'gmail', name: 'Gmail', icon: '✉️' },
+    { id: 'google-drive', name: 'Google Drive', icon: '📁' },
+    { id: 'github', name: 'GitHub', icon: '🐙' }
+  ];
+  const docs = (toolDb as any).db.prepare(`
+    SELECT * FROM knowledge_documents
+    WHERE is_local_demo = 1 OR owner_session_id = ?
+    ORDER BY created_at DESC
+  `).all(ownerSessionId || null) as any[];
 
   // Order canonical documents to match reference screenshot specification
   const canonicalOrder = ['doc-q4-roadmap', 'doc-competitor-analysis', 'doc-market-trends', 'doc-investor-notes', 'doc-product-requirements'];
@@ -381,34 +395,18 @@ export function renderKnowledgePage(toolDb: ToolDatabase, selectedDocId?: string
           <span class="text-xs text-blue-600 font-semibold cursor-pointer hover:underline" onclick="switchInspectTab('summary')">&larr; Back to Summary</span>
         </div>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-          <div class="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
-            <span class="font-bold text-slate-900 block flex items-center gap-1.5">
-              <span>📅</span>
-              <span>Google Calendar</span>
-            </span>
-            <p class="text-slate-500 text-[11px]">Synchronized tomorrow at 10:00 AM</p>
-          </div>
-          <div class="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
-            <span class="font-bold text-slate-900 block flex items-center gap-1.5">
-              <span>📝</span>
-              <span>Notion Workspace</span>
-            </span>
-            <p class="text-slate-500 text-[11px]">Roadmap milestones linked</p>
-          </div>
-          <div class="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
-            <span class="font-bold text-slate-900 block flex items-center gap-1.5">
-              <span>📁</span>
-              <span>Google Drive</span>
-            </span>
-            <p class="text-slate-500 text-[11px]">Referenced in executive review folder</p>
-          </div>
-          <div class="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
-            <span class="font-bold text-slate-900 block flex items-center gap-1.5">
-              <span>💬</span>
-              <span>Slack Discussions</span>
-            </span>
-            <p class="text-slate-500 text-[11px]">Shared in #product-strategy channel</p>
-          </div>
+          ${providerCards.map((provider) => {
+            const status = integrationStatuses.find((item) => item.id === provider.id)?.status || 'not_connected';
+            return `
+              <a href="/integrations" class="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-1 block hover:border-blue-300">
+                <span class="font-bold text-slate-900 flex items-center gap-1.5">
+                  <span>${provider.icon}</span>
+                  <span>${provider.name}</span>
+                </span>
+                <p class="text-slate-500 text-[11px]">Status: ${status.replace('_', ' ')}</p>
+              </a>
+            `;
+          }).join('')}
         </div>
       </div>
 

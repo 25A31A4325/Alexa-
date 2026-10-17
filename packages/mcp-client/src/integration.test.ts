@@ -1,13 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createOrchestraServer } from '@orchestra/mcp-server';
-import { OrchestraMcpClient } from './client.js';
+import { OrchestraMcpClient, withMcpRequestContext } from './client.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 test('ORCHESTRA MCP Streamable HTTP Integration Test Suite', async (t) => {
-  const TEST_PORT = 3199;
-  const TEST_URL = `http://127.0.0.1:${TEST_PORT}/mcp`;
+  const previousSessionSecret = process.env.SESSION_SECRET;
+  const previousEncryptionKey = process.env.OAUTH_ENCRYPTION_KEY;
+  process.env.SESSION_SECRET = 'mcp-integration-test-session-secret-0123456789';
+  process.env.OAUTH_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString('base64');
+  let currentServerUrl = '';
   const TEST_DB = path.join(process.cwd(), 'test-scratch.db');
 
   // Clean prior scratch db if exists
@@ -17,12 +20,13 @@ test('ORCHESTRA MCP Streamable HTTP Integration Test Suite', async (t) => {
 
   let serverInstance = createOrchestraServer({
     host: '127.0.0.1',
-    port: TEST_PORT,
+    port: 0,
     endpoint: '/mcp',
     dbPath: TEST_DB
   });
 
   let runningServer = await serverInstance.listen();
+  currentServerUrl = `http://127.0.0.1:${runningServer.port}/mcp`;
 
   t.after(async () => {
     if (runningServer) {
@@ -31,11 +35,15 @@ test('ORCHESTRA MCP Streamable HTTP Integration Test Suite', async (t) => {
     if (fs.existsSync(TEST_DB)) {
       try { fs.unlinkSync(TEST_DB); } catch {}
     }
+    if (previousSessionSecret === undefined) delete process.env.SESSION_SECRET;
+    else process.env.SESSION_SECRET = previousSessionSecret;
+    if (previousEncryptionKey === undefined) delete process.env.OAUTH_ENCRYPTION_KEY;
+    else process.env.OAUTH_ENCRYPTION_KEY = previousEncryptionKey;
   });
 
   // TC-MCP-01: Client connects to running server using selected compatible MCP protocol version
   await t.test('TC-MCP-01: Client connects to running server over Streamable HTTP', async () => {
-    const client = new OrchestraMcpClient({ serverUrl: TEST_URL });
+    const client = new OrchestraMcpClient({ serverUrl: currentServerUrl });
     await client.connect();
     const sessionId = client.getSessionId();
     assert.ok(sessionId, 'Client received a valid session ID upon handshake');
@@ -43,8 +51,8 @@ test('ORCHESTRA MCP Streamable HTTP Integration Test Suite', async (t) => {
   });
 
   // TC-MCP-02: Client discovers the registered tools over MCP
-  await t.test('TC-MCP-02: Client discovers all 16 registered tools dynamically', async () => {
-    const client = new OrchestraMcpClient({ serverUrl: TEST_URL });
+  await t.test('TC-MCP-02: Client discovers all registered tools dynamically', async () => {
+    const client = new OrchestraMcpClient({ serverUrl: currentServerUrl });
     await client.connect();
     const tools = await client.listTools();
     const toolNames = tools.map(t => t.name);
@@ -65,19 +73,33 @@ test('ORCHESTRA MCP Streamable HTTP Integration Test Suite', async (t) => {
       'calendar_create_reminder',
       'database_query',
       'send_notification',
-      'list_connected_services'
+      'list_connected_services',
+      'gmail_search',
+      'gmail_read_message',
+      'gmail_send',
+      'google_calendar_list_events',
+      'google_calendar_check_availability',
+      'google_calendar_create_event',
+      'google_calendar_update_event',
+      'google_drive_search',
+      'google_drive_read_file',
+      'github_list_repositories',
+      'github_search_repositories',
+      'github_search_code',
+      'github_read_repository_file',
+      'github_create_issue'
     ];
 
     for (const expected of expectedTools) {
       assert.ok(toolNames.includes(expected), `Tool '${expected}' was discovered over MCP`);
     }
-    assert.equal(tools.length, 16, 'All 16 tools discovered over MCP boundary');
+    assert.equal(tools.length, expectedTools.length, 'All demo and provider tools discovered over MCP boundary');
     await client.close();
   });
 
   // TC-MCP-03: Client invokes search_knowledge through MCP client
   await t.test('TC-MCP-03: Client invokes search_knowledge and receives demo documents', async () => {
-    const client = new OrchestraMcpClient({ serverUrl: TEST_URL });
+    const client = new OrchestraMcpClient({ serverUrl: currentServerUrl });
     await client.connect();
     const res = await client.callTool('search_knowledge', { query: 'Roadmap', limit: 3 }) as { results: Array<{ id: string; is_local_demo: boolean }> };
     assert.ok(res.results.length > 0, 'Found matching demonstration documents');
@@ -88,7 +110,7 @@ test('ORCHESTRA MCP Streamable HTTP Integration Test Suite', async (t) => {
 
   // TC-MCP-04: Client invokes retrieve_document through MCP and receives stored content
   await t.test('TC-MCP-04: Client invokes retrieve_document through MCP', async () => {
-    const client = new OrchestraMcpClient({ serverUrl: TEST_URL });
+    const client = new OrchestraMcpClient({ serverUrl: currentServerUrl });
     await client.connect();
     const res = await client.callTool('retrieve_document', { documentId: 'doc-q4-roadmap' }) as { id: string; content: string; is_local_demo: boolean };
     assert.equal(res.id, 'doc-q4-roadmap');
@@ -100,7 +122,7 @@ test('ORCHESTRA MCP Streamable HTTP Integration Test Suite', async (t) => {
   // TC-MCP-05: Client invokes create_task and confirms task is persisted
   let createdTaskId = '';
   await t.test('TC-MCP-05: Client invokes create_task and confirms task persisted', async () => {
-    const client = new OrchestraMcpClient({ serverUrl: TEST_URL });
+    const client = new OrchestraMcpClient({ serverUrl: currentServerUrl });
     await client.connect();
     const res = await client.callTool('create_task', {
       missionId: 'mission-hackathon-01',
@@ -122,7 +144,7 @@ test('ORCHESTRA MCP Streamable HTTP Integration Test Suite', async (t) => {
 
   // TC-MCP-06: Client invokes update_task and confirms updated state
   await t.test('TC-MCP-06: Client invokes update_task and confirms updated state', async () => {
-    const client = new OrchestraMcpClient({ serverUrl: TEST_URL });
+    const client = new OrchestraMcpClient({ serverUrl: currentServerUrl });
     await client.connect();
     const res = await client.callTool('update_task', {
       taskId: createdTaskId,
@@ -138,7 +160,7 @@ test('ORCHESTRA MCP Streamable HTTP Integration Test Suite', async (t) => {
 
   // TC-MCP-07: Invalid arguments are rejected
   await t.test('TC-MCP-07: Invalid arguments are rejected with schema validation error', async () => {
-    const client = new OrchestraMcpClient({ serverUrl: TEST_URL });
+    const client = new OrchestraMcpClient({ serverUrl: currentServerUrl });
     await client.connect();
     await assert.rejects(
       async () => {
@@ -173,13 +195,14 @@ test('ORCHESTRA MCP Streamable HTTP Integration Test Suite', async (t) => {
 
     serverInstance = createOrchestraServer({
       host: '127.0.0.1',
-      port: TEST_PORT,
+      port: 0,
       endpoint: '/mcp',
       dbPath: TEST_DB
     });
     runningServer = await serverInstance.listen();
+    currentServerUrl = `http://127.0.0.1:${runningServer.port}/mcp`;
 
-    const client = new OrchestraMcpClient({ serverUrl: TEST_URL });
+    const client = new OrchestraMcpClient({ serverUrl: currentServerUrl });
     await client.connect();
     const statusRes = await client.callTool('get_task_status', { missionId: 'mission-hackathon-01' }) as { totalTasks: number; tasks: Array<{ taskId: string; status: string }> };
     assert.equal(statusRes.totalTasks, 1, 'Persisted task survives server restart');
@@ -190,7 +213,7 @@ test('ORCHESTRA MCP Streamable HTTP Integration Test Suite', async (t) => {
 
   // TC-MCP-10: The server does not report success when a handler fails
   await t.test('TC-MCP-10: Server does not report success when handler fails', async () => {
-    const client = new OrchestraMcpClient({ serverUrl: TEST_URL });
+    const client = new OrchestraMcpClient({ serverUrl: currentServerUrl });
     await client.connect();
     await assert.rejects(
       async () => {
@@ -204,7 +227,7 @@ test('ORCHESTRA MCP Streamable HTTP Integration Test Suite', async (t) => {
 
   // TC-MCP-11: Actual negotiated protocol version meets the hackathon requirement
   await t.test('TC-MCP-11: Actual negotiated protocol version is 2025-11-25 or later', async () => {
-    const client = new OrchestraMcpClient({ serverUrl: TEST_URL });
+    const client = new OrchestraMcpClient({ serverUrl: currentServerUrl });
     await client.connect();
     const version = client.getNegotiatedProtocolVersion();
     assert.ok(version, 'Negotiated protocol version is defined');
@@ -217,7 +240,7 @@ test('ORCHESTRA MCP Streamable HTTP Integration Test Suite', async (t) => {
   });
 
   await t.test('TC-MCP-12: Calendar, analytics, notifications, and connector tools work on local demo data', async () => {
-    const client = new OrchestraMcpClient({ serverUrl: TEST_URL });
+    const client = new OrchestraMcpClient({ serverUrl: currentServerUrl });
     await client.connect();
 
     const calendar = await client.callTool('calendar_read_events', {}) as {
@@ -253,12 +276,35 @@ test('ORCHESTRA MCP Streamable HTTP Integration Test Suite', async (t) => {
     assert.equal(analytics.reminders.count, 1);
     assert.equal(analytics.is_local_demo, true);
 
-    const services = await client.callTool('list_connected_services', {}) as {
+    const services = await withMcpRequestContext(
+      { sessionId: 'mcp-test-owner-1' },
+      () => client.callTool('list_connected_services', {})
+    ) as {
       services: unknown[];
-      externalProviderAccess: boolean;
+      source: string;
     };
-    assert.ok(services.services.length > 0);
-    assert.equal(services.externalProviderAccess, false);
+    assert.equal(services.services.length, 4);
+    assert.equal(services.source, 'live-provider-authentication');
+    await client.close();
+  });
+
+  await t.test('TC-MCP-13: Provider tools require a signed browser identity and actual provider authorization', async () => {
+    const client = new OrchestraMcpClient({
+      serverUrl: currentServerUrl,
+      sessionSecret: process.env.SESSION_SECRET
+    });
+    await client.connect();
+    await assert.rejects(
+      client.callTool('github_list_repositories', {}),
+      /AUTH_REQUIRED|authenticated ORCHESTRA browser session/i
+    );
+    await assert.rejects(
+      withMcpRequestContext(
+        { sessionId: 'mcp-test-owner-1' },
+        () => client.callTool('github_list_repositories', {})
+      ),
+      /NOT_CONNECTED|Connect a GitHub account/i
+    );
     await client.close();
   });
 });

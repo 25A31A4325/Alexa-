@@ -1,15 +1,47 @@
 import { renderLayout } from '../components/layout.js';
 import { OrchestratorDatabase } from '@orchestra/orchestrator';
 
-export function renderHomePage(db: OrchestratorDatabase): string {
-  // Query actual persisted data from SQLite
-  const rawMissions = (db as any).db.prepare('SELECT * FROM missions ORDER BY created_at DESC LIMIT 5').all();
-  const activities = (db as any).db.prepare('SELECT * FROM activity_events ORDER BY created_at DESC LIMIT 5').all();
+export function renderHomePage(db: OrchestratorDatabase, ownerSessionId?: string): string {
+  const rawMissions = ownerSessionId
+    ? (db as any).db.prepare(`
+        SELECT m.* FROM missions m
+        JOIN mission_owners o ON o.mission_id = m.id
+        WHERE o.owner_session_id = ? ORDER BY m.created_at DESC LIMIT 5
+      `).all(ownerSessionId)
+    : [];
+  const activities = ownerSessionId
+    ? (db as any).db.prepare(`
+        SELECT a.* FROM activity_events a
+        WHERE a.owner_session_id = ?
+           OR a.mission_id IN (SELECT mission_id FROM mission_owners WHERE owner_session_id = ?)
+        ORDER BY a.created_at DESC LIMIT 5
+      `).all(ownerSessionId, ownerSessionId)
+    : [];
 
-  const totalMissions = (db as any).db.prepare('SELECT COUNT(*) as count FROM missions').get().count;
-  const completedMissions = (db as any).db.prepare("SELECT COUNT(*) as count FROM missions WHERE status = 'COMPLETED'").get().count;
-  const pendingApprovals = (db as any).db.prepare("SELECT COUNT(*) as count FROM approvals WHERE status = 'pending'").get().count;
-  const totalInvocations = (db as any).db.prepare('SELECT COUNT(*) as count FROM tool_invocation_records').get().count;
+  const totalMissions = ownerSessionId
+    ? (db as any).db.prepare('SELECT COUNT(*) AS count FROM mission_owners WHERE owner_session_id = ?').get(ownerSessionId).count
+    : 0;
+  const completedMissions = ownerSessionId
+    ? (db as any).db.prepare(`
+        SELECT COUNT(*) AS count FROM missions m
+        JOIN mission_owners o ON o.mission_id = m.id
+        WHERE o.owner_session_id = ? AND m.status = 'COMPLETED'
+      `).get(ownerSessionId).count
+    : 0;
+  const pendingApprovals = ownerSessionId
+    ? (db as any).db.prepare(`
+        SELECT COUNT(*) AS count FROM approvals a
+        WHERE a.status = 'pending' AND a.mission_id IN (
+          SELECT mission_id FROM mission_owners WHERE owner_session_id = ?
+        )
+      `).get(ownerSessionId).count
+    : 0;
+  const totalInvocations = ownerSessionId
+    ? (db as any).db.prepare(`
+        SELECT COUNT(*) AS count FROM tool_invocation_records
+        WHERE mission_id IN (SELECT mission_id FROM mission_owners WHERE owner_session_id = ?)
+      `).get(ownerSessionId).count
+    : 0;
 
   const missionsListHtml = rawMissions.length === 0
     ? `<div class="p-8 text-center text-slate-500 bg-slate-900/40 rounded-2xl border border-slate-800">

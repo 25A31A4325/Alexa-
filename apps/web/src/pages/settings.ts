@@ -1,6 +1,12 @@
 import { renderLayout } from '../components/layout.js';
 
-export function renderSettingsPage(): string {
+export function renderSettingsPage(integrationStatuses: Array<{ id: string; status: string }> = []): string {
+  const services = [
+    { id: 'google-calendar', name: 'Google Calendar', icon: '📅' },
+    { id: 'google-drive', name: 'Google Drive', icon: '📁' },
+    { id: 'gmail', name: 'Gmail', icon: '✉️' },
+    { id: 'github', name: 'GitHub', icon: '🐙' }
+  ];
   const bodyContent = `
     <div class="max-w-7xl mx-auto space-y-6 relative">
       <!-- Floating Iridescent Glass Bubbles Layer -->
@@ -358,65 +364,26 @@ export function renderSettingsPage(): string {
 
             <!-- List Items with Status Badges and Right Arrows -->
             <div class="space-y-2.5 text-xs">
-              <!-- Google Calendar -->
-              <div onclick="window.location.href='/integrations'" class="flex items-center justify-between p-2.5 rounded-xl hover:bg-slate-50 transition border border-transparent hover:border-slate-200 cursor-pointer group">
-                <div class="flex items-center gap-2.5">
-                  <span class="text-base">📅</span>
-                  <span class="font-semibold text-slate-800 group-hover:text-blue-600 transition">Google Calendar</span>
-                </div>
-                <div class="flex items-center gap-2">
-                  <span class="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 text-slate-500 border border-slate-200">Not Connected</span>
-                  <span class="text-slate-300 group-hover:text-blue-600 group-hover:translate-x-0.5 transition font-bold">→</span>
-                </div>
-              </div>
-
-              <!-- Google Drive -->
-              <div onclick="window.location.href='/integrations'" class="flex items-center justify-between p-2.5 rounded-xl hover:bg-slate-50 transition border border-transparent hover:border-slate-200 cursor-pointer group">
-                <div class="flex items-center gap-2.5">
-                  <span class="text-base">📁</span>
-                  <span class="font-semibold text-slate-800 group-hover:text-blue-600 transition">Google Drive</span>
-                </div>
-                <div class="flex items-center gap-2">
-                  <span class="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 text-slate-500 border border-slate-200">Not Connected</span>
-                  <span class="text-slate-300 group-hover:text-blue-600 group-hover:translate-x-0.5 transition font-bold">→</span>
-                </div>
-              </div>
-
-              <!-- Gmail -->
-              <div onclick="window.location.href='/integrations'" class="flex items-center justify-between p-2.5 rounded-xl hover:bg-slate-50 transition border border-transparent hover:border-slate-200 cursor-pointer group">
-                <div class="flex items-center gap-2.5">
-                  <span class="text-base">✉️</span>
-                  <span class="font-semibold text-slate-800 group-hover:text-blue-600 transition">Gmail</span>
-                </div>
-                <div class="flex items-center gap-2">
-                  <span class="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 text-slate-500 border border-slate-200">Not Connected</span>
-                  <span class="text-slate-300 group-hover:text-blue-600 group-hover:translate-x-0.5 transition font-bold">→</span>
-                </div>
-              </div>
-
-              <!-- Notion -->
-              <div onclick="window.location.href='/integrations'" class="flex items-center justify-between p-2.5 rounded-xl hover:bg-slate-50 transition border border-transparent hover:border-slate-200 cursor-pointer group">
-                <div class="flex items-center gap-2.5">
-                  <span class="text-base">📝</span>
-                  <span class="font-semibold text-slate-800 group-hover:text-blue-600 transition">Notion</span>
-                </div>
-                <div class="flex items-center gap-2">
-                  <span class="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 text-slate-500 border border-slate-200">Not Connected</span>
-                  <span class="text-slate-300 group-hover:text-blue-600 group-hover:translate-x-0.5 transition font-bold">→</span>
-                </div>
-              </div>
-
-              <!-- Slack -->
-              <div onclick="window.location.href='/integrations'" class="flex items-center justify-between p-2.5 rounded-xl hover:bg-slate-50 transition border border-transparent hover:border-slate-200 cursor-pointer group">
-                <div class="flex items-center gap-2.5">
-                  <span class="text-base">💬</span>
-                  <span class="font-semibold text-slate-800 group-hover:text-blue-600 transition">Slack</span>
-                </div>
-                <div class="flex items-center gap-2">
-                  <span class="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 text-slate-500 border border-slate-200">Not Connected</span>
-                  <span class="text-slate-300 group-hover:text-blue-600 group-hover:translate-x-0.5 transition font-bold">→</span>
-                </div>
-              </div>
+              ${services.map((service) => {
+                const status = integrationStatuses.find((item) => item.id === service.id)?.status || 'not_connected';
+                const badgeClass = status === 'connected'
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : status === 'error' || status === 'expired'
+                    ? 'bg-rose-50 text-rose-700 border-rose-200'
+                    : 'bg-slate-100 text-slate-500 border-slate-200';
+                return `
+                  <a href="/integrations" class="flex items-center justify-between p-2.5 rounded-xl hover:bg-slate-50 transition border border-transparent hover:border-slate-200 cursor-pointer group">
+                    <div class="flex items-center gap-2.5">
+                      <span class="text-base">${service.icon}</span>
+                      <span class="font-semibold text-slate-800 group-hover:text-blue-600 transition">${service.name}</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                      <span class="text-[10px] font-bold px-2 py-0.5 rounded-md border ${badgeClass}">${status.replace('_', ' ')}</span>
+                      <span class="text-slate-300 group-hover:text-blue-600 group-hover:translate-x-0.5 transition font-bold">→</span>
+                    </div>
+                  </a>
+                `;
+              }).join('')}
             </div>
 
             <!-- Bottom Link -->

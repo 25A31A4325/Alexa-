@@ -28,7 +28,6 @@ export class OrchestratorDatabase {
     this.db.exec('PRAGMA foreign_keys = ON;');
     this.initSchema();
     this.seedDefaultActivityEvents();
-    this.seedIntegrations();
   }
 
   private initSchema(): void {
@@ -47,6 +46,12 @@ export class OrchestratorDatabase {
         updated_at TEXT NOT NULL,
         completed_at TEXT,
         error_message TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS mission_owners (
+        mission_id TEXT PRIMARY KEY,
+        owner_session_id TEXT NOT NULL,
+        FOREIGN KEY (mission_id) REFERENCES missions(id) ON DELETE CASCADE
       );
 
       CREATE TABLE IF NOT EXISTS execution_plans (
@@ -122,6 +127,7 @@ export class OrchestratorDatabase {
         id TEXT PRIMARY KEY,
         mission_id TEXT,
         task_id TEXT,
+        owner_session_id TEXT,
         event_type TEXT NOT NULL,
         title TEXT NOT NULL,
         description TEXT NOT NULL,
@@ -150,7 +156,12 @@ export class OrchestratorDatabase {
         config_json TEXT NOT NULL DEFAULT '{}',
         updated_at TEXT NOT NULL
       );
+
     `);
+    const activityColumns = this.db.prepare('PRAGMA table_info(activity_events)').all() as Array<{ name: string }>;
+    if (!activityColumns.some((column) => column.name === 'owner_session_id')) {
+      this.db.exec('ALTER TABLE activity_events ADD COLUMN owner_session_id TEXT');
+    }
   }
 
   // --- Mission Operations ---
@@ -166,6 +177,23 @@ export class OrchestratorDatabase {
 
   public getMission(id: string): MissionRow | undefined {
     return this.db.prepare('SELECT * FROM missions WHERE id = ?').get(id) as unknown as MissionRow | undefined;
+  }
+
+  public setMissionOwner(missionId: string, ownerSessionId: string): void {
+    this.db.prepare(`
+      INSERT INTO mission_owners (mission_id, owner_session_id) VALUES (?, ?)
+      ON CONFLICT(mission_id) DO UPDATE SET owner_session_id = excluded.owner_session_id
+    `).run(missionId, ownerSessionId);
+    this.db.prepare(`
+      UPDATE activity_events SET owner_session_id = ?
+      WHERE mission_id = ? AND owner_session_id IS NULL
+    `).run(ownerSessionId, missionId);
+  }
+
+  public getMissionOwner(missionId: string): string | undefined {
+    const row = this.db.prepare('SELECT owner_session_id FROM mission_owners WHERE mission_id = ?')
+      .get(missionId) as { owner_session_id: string } | undefined;
+    return row?.owner_session_id;
   }
 
   public updateMissionGoal(id: string, goal: string): void {
@@ -536,15 +564,20 @@ export class OrchestratorDatabase {
     title: string;
     description: string;
     metadata?: Record<string, unknown>;
+    ownerSessionId?: string;
   }): void {
     const now = new Date().toISOString();
+    const ownerSessionId = event.ownerSessionId
+      || (event.missionId ? this.getMissionOwner(event.missionId) : undefined);
     this.db.prepare(`
-      INSERT INTO activity_events (id, mission_id, task_id, event_type, title, description, metadata_json, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO activity_events (
+        id, mission_id, task_id, owner_session_id, event_type, title, description, metadata_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       event.id,
       event.missionId || null,
       event.taskId || null,
+      ownerSessionId || null,
       event.eventType,
       event.title,
       event.description,

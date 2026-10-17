@@ -6,6 +6,7 @@ import { MissionPlanner } from './planner.js';
 import { ApprovalService } from './approvals.js';
 import { MissionVerifier } from './verifier.js';
 import { MissionRow, MissionTaskRow } from './types.js';
+import { withMcpRequestContext } from '@orchestra/mcp-client';
 
 export interface OrchestratorOptions {
   workerId?: string;
@@ -291,10 +292,31 @@ export class MissionOrchestrator {
       }
 
       // Call MCP Tool through the real client
-      const rawResult = await this.mcpClient.callTool(task.tool_name, inputArgs);
+      let rawResult: unknown;
+      if (task.requires_approval === 1 && task.approval_id) {
+        const approval = this.db.getApproval(task.approval_id);
+        if (!approval) {
+          throw new Error('Security policy blocked execution: approval record is missing.');
+        }
+        rawResult = await withMcpRequestContext({
+          approval: {
+            missionId,
+            taskId: task.id,
+            actionType: inputArgs.actionType || task.tool_name,
+            fingerprint: approval.canonical_fingerprint,
+            parameters: inputArgs.parameters || inputArgs
+          }
+        }, () => this.mcpClient.callTool(task.tool_name, inputArgs));
+      } else {
+        rawResult = await this.mcpClient.callTool(task.tool_name, inputArgs);
+      }
       const durationMs = Date.now() - start;
 
-      const resultJson = JSON.stringify(rawResult);
+      const isProviderTool = /^(gmail_|google_calendar_|google_drive_|github_)/.test(task.tool_name);
+      const persistedResult = isProviderTool
+        ? { providerResponseReceived: true, privateDataOmitted: true }
+        : rawResult;
+      const resultJson = JSON.stringify(persistedResult);
 
       this.db.updateTaskStatus(task.id, 'completed', resultJson, null, durationMs);
       const completedTask = this.db.getTask(task.id);
@@ -309,7 +331,9 @@ export class MissionOrchestrator {
         task_id: task.id,
         tool_name: task.tool_name,
         status: 'success',
-        input_json: task.tool_input_template,
+        input_json: isProviderTool
+          ? JSON.stringify({ redacted: true, fields: Object.keys(inputArgs).sort() })
+          : task.tool_input_template,
         output_json: resultJson,
         duration_ms: durationMs,
         invoked_at: new Date().toISOString()

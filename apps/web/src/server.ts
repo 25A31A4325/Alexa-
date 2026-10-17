@@ -1,9 +1,20 @@
 import express, { Request, Response } from 'express';
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import * as path from 'node:path';
 import { ToolDatabase, createOrchestraServer } from '@orchestra/mcp-server';
 import { OrchestratorDatabase, MissionOrchestrator } from '@orchestra/orchestrator';
+import { IntegrationService, IntegrationServiceError, ProviderName } from '@orchestra/mcp-server';
+import { withMcpRequestContext } from '@orchestra/mcp-client';
+import { OAuth2Client, CodeChallengeMethod } from 'google-auth-library';
+import { AuthService, AuthServiceError, AuthSession } from './auth.js';
+import {
+  renderLoginPage,
+  renderRegisterPage,
+  renderForgotPasswordPage,
+  renderResetPasswordPage,
+  renderVerifyEmailPage
+} from './auth-pages.js';
 
 import { renderHomePage } from './pages/home.js';
 import { renderNewConversationPage } from './pages/new-conversation.js';
@@ -24,9 +35,14 @@ export interface WebServerOptions {
   toolDb?: ToolDatabase;
   mcpServerUrl?: string;
   dbPath?: string;
+  integrationService?: IntegrationService;
+  authService?: AuthService;
 }
 
 let activeEmbeddedMcp: { close: () => Promise<void> } | null = null;
+if (!process.env.SESSION_SECRET && process.env.NODE_ENV !== 'production') {
+  process.env.SESSION_SECRET = randomBytes(32).toString('base64url');
+}
 
 function isSelfHostedMcp(urlStr?: string): boolean {
   try {
@@ -108,6 +124,8 @@ export function createWebApp(options: WebServerOptions = {}) {
   const dbPath = options.dbPath || process.env.ORCHESTRA_DB_PATH || process.env.DB_PATH || ':memory:';
   const orchestratorDb = options.orchestratorDb || new OrchestratorDatabase(dbPath);
   const toolDb = options.toolDb || new ToolDatabase(dbPath);
+  const integrationService = options.integrationService || new IntegrationService({ dbPath });
+  const authService = options.authService || new AuthService({ dbPath });
   toolDb.seedDemoKnowledge();
 
   const rawMcpUrl = normalizeMcpUrl(options.mcpServerUrl || process.env.MCP_SERVER_URL || 'http://127.0.0.1:3001/mcp');
@@ -128,13 +146,15 @@ export function createWebApp(options: WebServerOptions = {}) {
   // Security gate: Ensure production deployments cannot unintentionally run without authentication
   const isProduction = process.env.NODE_ENV === 'production';
   const apiKey = process.env.ORCHESTRA_API_KEY || process.env.ORCHESTRA_AUTH_TOKEN;
-  const allowInsecure = process.env.ALLOW_INSECURE_NO_AUTH === 'true' || process.env.ALLOW_UNAUTHENTICATED === 'true';
 
-  if (isProduction && !apiKey && !allowInsecure) {
+  if (isProduction && !apiKey) {
     throw new Error(
       'Security Release Gate Blocker: Running in production (NODE_ENV=production) without ORCHESTRA_API_KEY is prohibited. ' +
-      'Set ORCHESTRA_API_KEY or set ALLOW_INSECURE_NO_AUTH=true if protected by an external ingress boundary (e.g. reverse proxy).'
+      'Set ORCHESTRA_API_KEY before exposing the application.'
     );
+  }
+  if (isProduction && (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32)) {
+    throw new Error('Security Release Gate Blocker: Production requires SESSION_SECRET with at least 32 characters.');
   }
 
   function safeCompare(a: string, b: string): boolean {
@@ -145,164 +165,570 @@ export function createWebApp(options: WebServerOptions = {}) {
     return timingSafeEqual(bufA, bufB);
   }
 
-  function extractKeyFromCookie(cookieHeader?: string): string | null {
+  function extractCookie(cookieHeader: string | undefined, name: string): string | null {
     if (!cookieHeader) return null;
-    const match = cookieHeader.match(/(?:^|;\s*)(?:orchestra_key|orchestra_api_key)=([^;]+)/);
-    return (match && match[1]) ? decodeURIComponent(match[1].trim()) : null;
+    const entry = cookieHeader.split(';').map((part) => part.trim()).find((part) => part.startsWith(`${name}=`));
+    if (!entry) return null;
+    try {
+      return decodeURIComponent(entry.slice(name.length + 1));
+    } catch {
+      return null;
+    }
+  }
+
+  function resolveUserSession(req: Request): AuthSession | null {
+    const token = extractCookie(req.headers.cookie, 'orchestra_auth');
+    return authService.resolveSession(token);
+  }
+
+  function isAuthenticated(req: Request): boolean {
+    return Boolean(resolveUserSession(req));
+  }
+
+  function sessionIdForRequest(req: Request, res: Response): string {
+    const userSession = resolveUserSession(req);
+    if (userSession?.browserSessionId) {
+      return userSession.browserSessionId;
+    }
+    const signed = extractCookie(req.headers.cookie, 'orchestra_session');
+    if (signed) {
+      const separator = signed.lastIndexOf('.');
+      if (separator > 0) {
+        const sessionId = signed.slice(0, separator);
+        const signature = signed.slice(separator + 1);
+        if (integrationService.verifySessionId(sessionId, signature)) return sessionId;
+      }
+    }
+    const sessionId = integrationService.createSessionId();
+    const value = `${sessionId}.${integrationService.signSessionId(sessionId)}`;
+    res.cookie('orchestra_session', value, {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: 'lax',
+      path: '/',
+      maxAge: 30 * 24 * 60 * 60 * 1000
+    });
+    return sessionId;
+  }
+
+  function optionalSessionId(req: Request, res: Response): string | undefined {
+    if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32) return undefined;
+    return sessionIdForRequest(req, res);
+  }
+
+  function canAccessMission(missionId: string, sessionId: string | undefined): boolean {
+    const owner = orchestratorDb.getMissionOwner(missionId);
+    if (owner) return Boolean(sessionId && owner === sessionId);
+    return missionId === 'demo-meeting-prep';
+  }
+
+  function assertSameOrigin(req: Request): void {
+    const fetchSite = req.header('sec-fetch-site');
+    if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'same-site' && fetchSite !== 'none') {
+      throw new IntegrationServiceError('Cross-site integration requests are not allowed.', 'CSRF_REJECTED', 403);
+    }
+    const origin = req.header('origin');
+    if (!origin) throw new IntegrationServiceError('The browser request origin is missing.', 'CSRF_REJECTED', 403);
+    const allowedHosts = new Set([req.header('x-forwarded-host'), req.get('host')].filter(Boolean));
+    if (process.env.PUBLIC_APP_ORIGIN) {
+      try {
+        allowedHosts.add(new URL(process.env.PUBLIC_APP_ORIGIN).host);
+      } catch {
+        throw new Error('PUBLIC_APP_ORIGIN must be a valid absolute URL.');
+      }
+    }
+    let originHost: string;
+    try {
+      const parsed = new URL(origin);
+      if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') throw new Error();
+      originHost = parsed.host;
+    } catch {
+      throw new IntegrationServiceError('The browser request origin is invalid.', 'CSRF_REJECTED', 403);
+    }
+    if (!allowedHosts.has(originHost)) {
+      throw new IntegrationServiceError('The browser request origin did not match this application.', 'CSRF_REJECTED', 403);
+    }
   }
 
   function safeReturnTo(value: unknown): string {
-    return typeof value === 'string' && value.startsWith('/') && !value.startsWith('//')
-      ? value
-      : '/';
+    if (typeof value !== 'string' || !value.startsWith('/') || value.startsWith('//')
+      || /[\\\u0000-\u001f\u007f]/.test(value)) return '/';
+    try {
+      const parsed = new URL(value, 'http://orchestra.local');
+      return parsed.origin === 'http://orchestra.local' ? value : '/';
+    } catch {
+      return '/';
+    }
   }
 
-  function renderLoginPage(returnTo: string, hasError: boolean = false): string {
-    const escapedReturnTo = returnTo
-      .replace(/&/g, '&amp;')
-      .replace(/"/g, '&quot;')
-      .replace(/</g, '&lt;');
-    return `<!doctype html>
-      <html lang="en">
-        <head>
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1">
-          <title>Sign in · Alexa+</title>
-          <style>
-            * { box-sizing: border-box; }
-            body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; background: #f8fafc; color: #0f172a; font-family: Inter, system-ui, sans-serif; }
-            main { width: min(100%, 420px); padding: 32px; border: 1px solid #e2e8f0; border-radius: 20px; background: white; box-shadow: 0 16px 48px #0f172a12; }
-            h1 { margin: 0 0 8px; font-size: 24px; } p { color: #64748b; font-size: 14px; line-height: 1.5; }
-            label { display: block; margin: 24px 0 8px; font-size: 13px; font-weight: 700; }
-            input { width: 100%; padding: 12px; border: 1px solid #cbd5e1; border-radius: 10px; font: inherit; }
-            button { width: 100%; margin-top: 16px; padding: 12px; border: 0; border-radius: 10px; background: #2563eb; color: white; font: inherit; font-weight: 700; cursor: pointer; }
-            .error { color: #b91c1c; } .hint { font-size: 12px; }
-          </style>
-        </head>
-        <body>
-          <main>
-            <h1>Sign in to Alexa+</h1>
-            <p>Enter the app access key configured as <code>ORCHESTRA_API_KEY</code> in your deployment settings.</p>
-            ${hasError ? '<p class="error" role="alert">That access key was not accepted. Please try again.</p>' : ''}
-            <form method="post" action="/auth/login">
-              <input type="hidden" name="returnTo" value="${escapedReturnTo}">
-              <label for="apiKey">App access key</label>
-              <input id="apiKey" name="apiKey" type="password" autocomplete="current-password" required autofocus>
-              <button type="submit">Sign in</button>
-            </form>
-            <p class="hint">The key is stored in your deployment environment and is not sent to any external service.</p>
-          </main>
-        </body>
-      </html>`;
-  }
-
-  app.get('/login', (req: Request, res: Response) => {
-    if (!apiKey) {
-      res.redirect('/');
-      return;
-    }
-    res.type('html').send(renderLoginPage(safeReturnTo(req.query.returnTo)));
-  });
-
-  app.post('/auth/login', (req: Request, res: Response) => {
-    if (!apiKey) {
-      res.redirect('/');
-      return;
-    }
-
-    const returnTo = safeReturnTo(req.body.returnTo);
-    const providedKey = typeof req.body.apiKey === 'string' ? req.body.apiKey : '';
-    if (!safeCompare(providedKey, apiKey)) {
-      res.status(401).type('html').send(renderLoginPage(returnTo, true));
-      return;
-    }
-
-    res.cookie('orchestra_key', providedKey, {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: 'strict',
-      path: '/',
-      maxAge: 7 * 24 * 60 * 60 * 1000
-    });
-    res.redirect(returnTo);
-  });
-
-  app.post('/auth/logout', (_req: Request, res: Response) => {
-    res.clearCookie('orchestra_key', {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: 'strict',
-      path: '/'
-    });
-    res.redirect('/login');
-  });
-
-  if (apiKey) {
-    app.use('/api', (req: Request, res: Response, next) => {
-      // Allow unauthenticated health check
-      if (req.path === '/health') return next();
-
-      const authHeader = req.headers['authorization'];
-      let bearerToken: string | null = null;
-      if (authHeader) {
-        const trimmed = authHeader.trim();
-        if (trimmed.toLowerCase().startsWith('bearer')) {
-          bearerToken = trimmed.slice(6).trim();
-          if (!bearerToken) {
-            return res.status(401).json({
-              error: 'Unauthorized: Malformed Bearer token.',
-              code: 'AUTH_REQUIRED'
-            });
-          }
-        } else {
-          // Unexpected or non-Bearer authorization header format
-          return res.status(401).json({
-            error: 'Unauthorized: Unsupported Authorization scheme. Use Bearer <token>.',
-            code: 'AUTH_REQUIRED'
-          });
-        }
+  app.use(['/auth/login', '/auth/register', '/auth/forgot-password', '/auth/reset-password', '/auth/logout'],
+    (req: Request, res: Response, next) => {
+      if (!isProduction || req.method !== 'POST') return next();
+      try {
+        assertSameOrigin(req);
+        return next();
+      } catch {
+        return res.status(403).type('html').send('This request origin is not allowed.');
       }
-
-      const customKey = (req.headers['x-api-key'] as string | undefined)?.trim();
-      const queryKey = (req.query['api_key'] as string | undefined)?.trim();
-      const cookieKey = extractKeyFromCookie(req.headers['cookie']);
-      const providedKey = bearerToken || customKey || queryKey || cookieKey;
-
-      if (!providedKey || !safeCompare(providedKey, apiKey)) {
-        return res.status(401).json({
-          error: 'Unauthorized: Missing or invalid API key.',
-          code: 'AUTH_REQUIRED'
-        });
-      }
+    });
+  app.use(['/login', '/register', '/forgot-password', '/reset-password', '/verify-email', '/auth'],
+    (_req: Request, res: Response, next) => {
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('Referrer-Policy', 'no-referrer');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('X-Frame-Options', 'DENY');
       next();
     });
 
-    app.use((req: Request, res: Response, next) => {
-      if (
-        req.path === '/login' ||
-        req.path === '/auth/login' ||
-        req.path === '/auth/logout' ||
-        req.path.startsWith('/static') ||
-        req.path === '/favicon.ico' ||
-        req.path.startsWith('/api/')
-      ) {
-        next();
-        return;
-      }
+  // --- User Authentication Routes ---
+  app.get('/login', (req: Request, res: Response) => {
+    if (isAuthenticated(req)) {
+      return res.redirect('/');
+    }
+    const error = typeof req.query.error === 'string' ? req.query.error : null;
+    const success = typeof req.query.success === 'string' ? req.query.success : null;
+    const returnTo = safeReturnTo(req.query.returnTo);
+    const googleConfigured = Boolean(
+      process.env.GOOGLE_CLIENT_ID
+      && process.env.GOOGLE_CLIENT_SECRET
+      && process.env.GOOGLE_AUTH_REDIRECT_URI
+    );
+    res.type('html').send(renderLoginPage({ error, success, returnTo, googleConfigured }));
+  });
 
-      const cookieKey = extractKeyFromCookie(req.headers.cookie);
-      if (cookieKey && safeCompare(cookieKey, apiKey)) {
-        next();
-        return;
-      }
+  app.post('/auth/login', async (req: Request, res: Response) => {
+    const returnTo = safeReturnTo(req.body.returnTo);
+    const googleConfigured = Boolean(
+      process.env.GOOGLE_CLIENT_ID
+      && process.env.GOOGLE_CLIENT_SECRET
+      && process.env.GOOGLE_AUTH_REDIRECT_URI
+    );
 
-      if (req.accepts('html')) {
-        res.redirect(`/login?returnTo=${encodeURIComponent(req.originalUrl)}`);
-        return;
+    if (req.body.email && typeof req.body.email === 'string') {
+      const email = req.body.email.trim();
+      const password = typeof req.body.password === 'string' ? req.body.password : '';
+      try {
+        const user = await authService.login(email, password, req.ip || 'unknown');
+        const sessionId = user.id;
+        res.cookie('orchestra_session', `${sessionId}.${integrationService.signSessionId(sessionId)}`, {
+          httpOnly: true,
+          secure: isProduction,
+          sameSite: 'lax',
+          path: '/',
+          maxAge: 30 * 24 * 60 * 60 * 1000
+        });
+        const session = authService.createSession(user.id, sessionId);
+        res.cookie('orchestra_auth', session.token, {
+          httpOnly: true,
+          secure: isProduction,
+          sameSite: 'lax',
+          path: '/',
+          maxAge: 14 * 24 * 60 * 60 * 1000
+        });
+        return res.redirect(returnTo);
+      } catch (err: any) {
+        const statusCode = err instanceof AuthServiceError ? err.statusCode : 400;
+        return res.status(statusCode).type('html').send(renderLoginPage({
+          error: err.message || 'Invalid email or password.',
+          returnTo,
+          email,
+          googleConfigured
+        }));
       }
-      res.status(401).json({ error: 'Authentication required', code: 'AUTH_REQUIRED' });
+    }
+
+    return res.status(400).type('html').send(renderLoginPage({
+      error: 'Please enter your email and password.',
+      returnTo,
+      googleConfigured
+    }));
+  });
+
+  app.get('/register', (req: Request, res: Response) => {
+    if (isAuthenticated(req)) {
+      return res.redirect('/');
+    }
+    const error = typeof req.query.error === 'string' ? req.query.error : null;
+    const returnTo = safeReturnTo(req.query.returnTo);
+    const googleConfigured = Boolean(
+      process.env.GOOGLE_CLIENT_ID
+      && process.env.GOOGLE_CLIENT_SECRET
+      && process.env.GOOGLE_AUTH_REDIRECT_URI
+    );
+    res.type('html').send(renderRegisterPage({ error, returnTo, googleConfigured }));
+  });
+
+  app.post('/auth/register', async (req: Request, res: Response) => {
+    const returnTo = safeReturnTo(req.body.returnTo);
+    const email = typeof req.body.email === 'string' ? req.body.email.trim() : '';
+    const password = typeof req.body.password === 'string' ? req.body.password : '';
+    const confirmPassword = typeof req.body.confirmPassword === 'string' ? req.body.confirmPassword : '';
+    const name = typeof req.body.name === 'string' ? req.body.name.trim() : undefined;
+    const googleConfigured = Boolean(
+      process.env.GOOGLE_CLIENT_ID
+      && process.env.GOOGLE_CLIENT_SECRET
+      && process.env.GOOGLE_AUTH_REDIRECT_URI
+    );
+
+    if (!email || !password) {
+      return res.status(400).type('html').send(renderRegisterPage({
+        error: 'Please provide both an email address and a password.',
+        returnTo,
+        email,
+        googleConfigured
+      }));
+    }
+
+    if (password !== confirmPassword) {
+      return res.status(400).type('html').send(renderRegisterPage({
+        error: 'Passwords do not match. Please verify and try again.',
+        returnTo,
+        email,
+        googleConfigured
+      }));
+    }
+
+    const rate = authService.checkRateLimit(`register:${req.ip || 'unknown'}`, 5);
+    if (!rate.allowed) {
+      return res.status(429).type('html').send(renderRegisterPage({
+        error: 'Too many account creation attempts. Please try again later.',
+        returnTo,
+        googleConfigured
+      }));
+    }
+
+    try {
+      await authService.register(email, password, name);
+      return res.type('html').send(renderRegisterPage({
+        success: 'If the address is eligible, check your inbox for a verification link. If you already have an account, sign in.',
+        returnTo,
+        googleConfigured
+      }));
+    } catch (err: any) {
+      if (err instanceof AuthServiceError && err.code === 'EMAIL_EXISTS') {
+        return res.type('html').send(renderRegisterPage({
+          success: 'If the address is eligible, check your inbox for a verification link. If you already have an account, sign in.',
+          returnTo,
+          googleConfigured
+        }));
+      }
+      const statusCode = err instanceof AuthServiceError ? err.statusCode : 400;
+      return res.status(statusCode).type('html').send(renderRegisterPage({
+        error: err.message || 'Registration could not be completed.',
+        returnTo,
+        email,
+        googleConfigured
+      }));
+    }
+  });
+
+  app.get('/forgot-password', (_req: Request, res: Response) => {
+    res.type('html').send(renderForgotPasswordPage());
+  });
+
+  app.post('/auth/forgot-password', async (req: Request, res: Response) => {
+    const email = typeof req.body.email === 'string' ? req.body.email.trim() : '';
+    if (!email) {
+      return res.status(400).type('html').send(renderForgotPasswordPage({
+        error: 'Please enter your email address.'
+      }));
+    }
+    try {
+      await authService.requestPasswordReset(email, req.ip || 'unknown');
+      return res.type('html').send(renderForgotPasswordPage({
+        success: 'If an account matches this address, reset instructions will be sent when email delivery is available.',
+        email
+      }));
+    } catch (error) {
+      if (error instanceof AuthServiceError && error.code === 'RATE_LIMITED') {
+        return res.status(429).type('html').send(renderForgotPasswordPage({
+          error: 'Too many password reset requests. Please try again later.'
+        }));
+      }
+      console.error(
+        '[AUTH] Password-reset delivery failed:',
+        error instanceof Error ? error.message : 'Unknown email provider error.'
+      );
+      return res.type('html').send(renderForgotPasswordPage({
+        success: 'If an account matches this address, reset instructions will be sent when email delivery is available.'
+      }));
+    }
+  });
+
+  app.get('/reset-password', (req: Request, res: Response) => {
+    const token = typeof req.query.token === 'string' ? req.query.token : '';
+    if (!token) {
+      return res.redirect('/forgot-password');
+    }
+    res.type('html').send(renderResetPasswordPage(token));
+  });
+
+  app.post('/auth/reset-password', async (req: Request, res: Response) => {
+    const token = typeof req.body.token === 'string' ? req.body.token : '';
+    const password = typeof req.body.password === 'string' ? req.body.password : '';
+    const confirmPassword = typeof req.body.confirmPassword === 'string' ? req.body.confirmPassword : '';
+
+    if (!token) {
+      return res.redirect('/forgot-password');
+    }
+    if (password !== confirmPassword) {
+      return res.status(400).type('html').send(renderResetPasswordPage(token, {
+        error: 'Passwords do not match.'
+      }));
+    }
+
+    try {
+      await authService.resetPassword(token, password);
+      return res.redirect(`/login?success=${encodeURIComponent('Your password has been reset successfully. Please sign in with your new password.')}`);
+    } catch (err: any) {
+      const statusCode = err instanceof AuthServiceError ? err.statusCode : 400;
+      return res.status(statusCode).type('html').send(renderResetPasswordPage(token, {
+        error: err.message || 'Failed to reset password.'
+      }));
+    }
+  });
+
+  app.get('/verify-email', (req: Request, res: Response) => {
+    const token = typeof req.query.token === 'string' ? req.query.token : '';
+    const success = token ? authService.verifyEmailToken(token) : false;
+    res.type('html').send(renderVerifyEmailPage(success));
+  });
+
+  // --- Google OAuth for User Sign-In ---
+  app.get('/auth/google', (req: Request, res: Response) => {
+    const googleClientId = process.env.GOOGLE_CLIENT_ID;
+    const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    const redirectUri = process.env.GOOGLE_AUTH_REDIRECT_URI;
+    const returnTo = safeReturnTo(req.query.returnTo);
+
+    if (!googleClientId || !googleClientSecret || !redirectUri) {
+      return res.redirect(`/login?error=${encodeURIComponent('Google sign-in is not configured. Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_AUTH_REDIRECT_URI.')}`);
+    }
+
+    const state = randomUUID();
+    const codeVerifier = randomBytes(32).toString('base64url');
+    const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url');
+    res.cookie('orchestra_google_state', JSON.stringify({ state, codeVerifier, returnTo }), {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: 'lax',
+      path: '/auth/google/callback',
+      maxAge: 10 * 60 * 1000
     });
-  }
+
+    const client = new OAuth2Client(googleClientId, googleClientSecret, redirectUri);
+    res.redirect(client.generateAuthUrl({
+      access_type: 'online',
+      prompt: 'select_account',
+      scope: ['openid', 'email', 'profile'],
+      state,
+      code_challenge: codeChallenge,
+      code_challenge_method: CodeChallengeMethod.S256
+    }));
+  });
+
+  app.get('/auth/google/callback', async (req: Request, res: Response) => {
+    const rawStateCookie = extractCookie(req.headers.cookie, 'orchestra_google_state');
+    res.clearCookie('orchestra_google_state', { path: '/auth/google/callback' });
+
+    let storedState: { state: string; codeVerifier: string; returnTo?: string } | null = null;
+    if (rawStateCookie) {
+      try {
+        storedState = JSON.parse(rawStateCookie);
+      } catch {}
+    }
+
+    const returnTo = safeReturnTo(storedState?.returnTo);
+
+    if (req.query.error) {
+      return res.redirect(`/login?error=${encodeURIComponent('Google sign-in was cancelled or failed.')}`);
+    }
+
+    const code = typeof req.query.code === 'string' ? req.query.code : '';
+    const state = typeof req.query.state === 'string' ? req.query.state : '';
+
+    if (!code || !state || !storedState || storedState.state !== state) {
+      return res.redirect(`/login?error=${encodeURIComponent('Invalid or expired Google authorization session. Please try again.')}`);
+    }
+
+    const googleClientId = process.env.GOOGLE_CLIENT_ID;
+    const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    const redirectUri = process.env.GOOGLE_AUTH_REDIRECT_URI;
+    if (!googleClientId || !googleClientSecret || !redirectUri) {
+      return res.redirect(`/login?error=${encodeURIComponent('Google sign-in is not configured.')}`);
+    }
+
+    try {
+      const client = new OAuth2Client(googleClientId, googleClientSecret, redirectUri);
+      const { tokens } = await client.getToken({
+        code,
+        codeVerifier: storedState.codeVerifier,
+        redirect_uri: redirectUri
+      });
+      if (!tokens.id_token) {
+        return res.redirect(`/login?error=${encodeURIComponent('Google did not return an identity token.')}`);
+      }
+      const ticket = await client.verifyIdToken({ idToken: tokens.id_token, audience: googleClientId });
+      const payload = ticket.getPayload();
+      if (!payload?.sub || !payload.email || payload.email_verified !== true) {
+        return res.redirect(`/login?error=${encodeURIComponent('Google did not return a verified email address.')}`);
+      }
+      const profile = {
+        sub: payload.sub,
+        email: payload.email,
+        name: payload.name,
+        picture: payload.picture,
+        email_verified: payload.email_verified
+      };
+      const user = authService.loginWithGoogle(profile);
+
+      const browserSessionId = user.id;
+      res.cookie('orchestra_session', `${browserSessionId}.${integrationService.signSessionId(browserSessionId)}`, {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: 'lax',
+        path: '/',
+        maxAge: 30 * 24 * 60 * 60 * 1000
+      });
+      const session = authService.createSession(user.id, browserSessionId);
+
+      res.cookie('orchestra_auth', session.token, {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: 'lax',
+        path: '/',
+        maxAge: 14 * 24 * 60 * 60 * 1000
+      });
+
+      res.redirect(returnTo);
+    } catch {
+      res.redirect(`/login?error=${encodeURIComponent('An unexpected error occurred during Google sign-in.')}`);
+    }
+  });
+
+  const handleLogout = (req: Request, res: Response) => {
+    const token = extractCookie(req.headers.cookie, 'orchestra_auth');
+    if (token) {
+      authService.destroySession(token);
+    }
+    res.clearCookie('orchestra_auth', {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: 'lax',
+      path: '/'
+    });
+    res.clearCookie('orchestra_key', {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: 'lax',
+      path: '/'
+    });
+    res.clearCookie('orchestra_session', {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: 'lax',
+      path: '/'
+    });
+    res.redirect('/login');
+  };
+  app.get('/auth/logout', handleLogout);
+  app.post('/auth/logout', handleLogout);
+
+  // --- API Authentication Middleware ---
+  app.use('/api', (req: Request, res: Response, next) => {
+    // 1. Allow unauthenticated health check
+    if (req.path === '/health') return next();
+
+    // 2. Allow API key authentication via Authorization header or x-api-key
+    const authHeader = req.headers['authorization'];
+    let bearerToken: string | null = null;
+    if (authHeader) {
+      const trimmed = authHeader.trim();
+      if (trimmed.toLowerCase().startsWith('bearer')) {
+        bearerToken = trimmed.slice(6).trim();
+      }
+    }
+    const customKey = (req.headers['x-api-key'] as string | undefined)?.trim();
+    const providedApiKey = bearerToken || customKey;
+
+    if (apiKey && providedApiKey && safeCompare(providedApiKey, apiKey)) {
+      return next();
+    }
+
+    // Browser access uses a server-side user session; API keys are header-only.
+    if (isAuthenticated(req)) {
+      return next();
+    }
+
+    if (!isProduction && !apiKey) {
+      return next();
+    }
+
+    return res.status(401).json({
+      error: 'Unauthorized: Authentication required. Sign in or provide a valid API key.',
+      code: 'AUTH_REQUIRED'
+    });
+  });
+
+  app.get('/api/auth/me', (req: Request, res: Response) => {
+    const session = resolveUserSession(req);
+    if (!session) {
+      return res.status(401).json({ error: 'Authentication required', code: 'AUTH_REQUIRED' });
+    }
+    return res.json({
+      user: { id: session.userId, email: session.email, name: session.name },
+      expiresAt: session.expiresAt
+    });
+  });
+
+  // --- UI Route Protection Middleware ---
+  app.use((req: Request, res: Response, next) => {
+    const publicPaths = [
+      '/login',
+      '/register',
+      '/forgot-password',
+      '/reset-password',
+      '/verify-email',
+      '/auth/login',
+      '/auth/register',
+      '/auth/forgot-password',
+      '/auth/reset-password',
+      '/auth/logout',
+      '/auth/google',
+      '/auth/google/callback'
+    ];
+
+    if (
+      publicPaths.includes(req.path) ||
+      req.path.startsWith('/static') ||
+      req.path === '/favicon.ico' ||
+      req.path.startsWith('/api/')
+    ) {
+      return next();
+    }
+
+    if (isAuthenticated(req)) {
+      return next();
+    }
+
+    const authCookie = extractCookie(req.headers.cookie, 'orchestra_auth');
+    if (authCookie && !resolveUserSession(req)) {
+      res.clearCookie('orchestra_auth', { path: '/' });
+      if (req.accepts('html')) {
+        return res.redirect(`/login?returnTo=${encodeURIComponent(req.originalUrl)}`);
+      }
+      return res.status(401).json({ error: 'Session expired or invalid', code: 'AUTH_REQUIRED' });
+    }
+
+    if (isProduction || apiKey) {
+      if (req.accepts('html')) {
+        return res.redirect(`/login?returnTo=${encodeURIComponent(req.originalUrl)}`);
+      }
+      return res.status(401).json({ error: 'Authentication required', code: 'AUTH_REQUIRED' });
+    }
+
+    next();
+  });
 
   // Static Assets (Amazon branding and logo assets)
   const currentDir = path.dirname(fileURLToPath(import.meta.url));
@@ -386,8 +812,8 @@ export function createWebApp(options: WebServerOptions = {}) {
     res.type('html').send(renderHomePage(orchestrator!.db));
   });
 
-  app.get('/home', (_req: Request, res: Response) => {
-    res.type('html').send(renderHomePage(orchestrator!.db));
+  app.get('/home', (req: Request, res: Response) => {
+    res.type('html').send(renderHomePage(orchestrator!.db, optionalSessionId(req, res)));
   });
 
   app.get('/new', (_req: Request, res: Response) => {
@@ -396,21 +822,29 @@ export function createWebApp(options: WebServerOptions = {}) {
 
   app.get('/missions', (req: Request, res: Response) => {
     ensureDemoMeetingPrep(orchestrator!.db);
+    const ownerSessionId = optionalSessionId(req, res);
     if (req.query.view === 'list') {
-      res.type('html').send(renderMissionsListPage(orchestrator!.db));
+      res.type('html').send(renderMissionsListPage(orchestrator!.db, ownerSessionId));
       return;
     }
     res.type('html').send(renderMissionDetailPage('demo-meeting-prep', orchestrator!.db));
   });
 
-  app.get('/missions-list', (_req: Request, res: Response) => {
+  app.get('/missions-list', (req: Request, res: Response) => {
     ensureDemoMeetingPrep(orchestrator!.db);
-    res.type('html').send(renderMissionsListPage(orchestrator!.db));
+    res.type('html').send(renderMissionsListPage(orchestrator!.db, optionalSessionId(req, res)));
   });
 
   app.get('/missions/:id', (req: Request, res: Response) => {
     ensureDemoMeetingPrep(orchestrator!.db);
     const missionId = String(req.params.id);
+    if (!canAccessMission(
+      missionId === 'doc-q4-roadmap' ? 'demo-meeting-prep' : missionId,
+      optionalSessionId(req, res)
+    )) {
+      res.status(404).send('Mission not found');
+      return;
+    }
     if (missionId === 'doc-q4-roadmap') {
       res.type('html').send(renderMissionDetailPage('demo-meeting-prep', orchestrator!.db));
       return;
@@ -418,16 +852,25 @@ export function createWebApp(options: WebServerOptions = {}) {
     res.type('html').send(renderMissionDetailPage(missionId, orchestrator!.db));
   });
 
-  app.get('/plan', (_req: Request, res: Response) => {
-    res.type('html').send(renderPlanPage(orchestrator!.db));
+  app.get('/plan', async (req: Request, res: Response) => {
+    const ownerSessionId = optionalSessionId(req, res);
+    const statuses = ownerSessionId ? await integrationService.listStatuses(ownerSessionId) : [];
+    res.type('html').send(renderPlanPage(orchestrator!.db, ownerSessionId, statuses));
   });
 
-  app.get('/results', (_req: Request, res: Response) => {
-    res.type('html').send(renderResultsPage(orchestrator!.db));
+  app.get('/results', (req: Request, res: Response) => {
+    res.type('html').send(renderResultsPage(orchestrator!.db, optionalSessionId(req, res)));
   });
 
-  app.get('/knowledge', (req: Request, res: Response) => {
-    res.type('html').send(renderKnowledgePage(toolDb, req.query.id as string | undefined));
+  app.get('/knowledge', async (req: Request, res: Response) => {
+    const ownerSessionId = optionalSessionId(req, res);
+    const statuses = ownerSessionId ? await integrationService.listStatuses(ownerSessionId) : [];
+    res.type('html').send(renderKnowledgePage(
+      toolDb,
+      req.query.id as string | undefined,
+      ownerSessionId,
+      statuses
+    ));
   });
 
   app.get('/tools', async (_req: Request, res: Response) => {
@@ -458,29 +901,44 @@ export function createWebApp(options: WebServerOptions = {}) {
   });
 
   app.get('/integrations', (_req: Request, res: Response) => {
-    res.type('html').send(renderIntegrationsPage(orchestratorDb));
+    res.type('html').send(renderIntegrationsPage());
   });
 
-  app.get('/activity', (req: Request, res: Response) => {
-    res.type('html').send(renderActivityPage(orchestrator!.db, req.query.filter as string | undefined));
+  app.get('/activity', async (req: Request, res: Response) => {
+    const ownerSessionId = optionalSessionId(req, res);
+    const integrationsCount = ownerSessionId
+      ? (await integrationService.listStatuses(ownerSessionId)).filter((integration) => integration.status === 'connected').length
+      : 0;
+    res.type('html').send(renderActivityPage(
+      orchestrator!.db,
+      req.query.filter as string | undefined,
+      ownerSessionId,
+      integrationsCount
+    ));
   });
 
-  app.get('/settings', (_req: Request, res: Response) => {
-    res.type('html').send(renderSettingsPage());
+  app.get('/settings', async (req: Request, res: Response) => {
+    const ownerSessionId = optionalSessionId(req, res);
+    const statuses = ownerSessionId ? await integrationService.listStatuses(ownerSessionId) : [];
+    res.type('html').send(renderSettingsPage(statuses));
   });
 
   // --- REST API Endpoints ---
 
   // 1. Missions List & Submit
-  app.get('/api/missions', (_req: Request, res: Response) => {
+  app.get('/api/missions', (req: Request, res: Response) => {
     try {
+      const ownerSessionId = optionalSessionId(req, res);
+      if (!ownerSessionId) return res.json({ missions: [] });
       const missions = (orchestratorDb as any).db.prepare(`
         SELECT m.*, 
           (SELECT COUNT(*) FROM mission_tasks WHERE mission_id = m.id) as total_tasks,
           (SELECT COUNT(*) FROM mission_tasks WHERE mission_id = m.id AND status = 'completed') as completed_tasks
-        FROM missions m 
+        FROM missions m
+        JOIN mission_owners owner ON owner.mission_id = m.id
+        WHERE owner.owner_session_id = ?
         ORDER BY m.created_at DESC
-      `).all();
+      `).all(ownerSessionId);
       return res.json({ missions });
     } catch (err: any) {
       return res.status(500).json({ error: err.message || 'Failed to list missions' });
@@ -494,12 +952,23 @@ export function createWebApp(options: WebServerOptions = {}) {
         return res.status(400).json({ error: 'Goal is required and must be at least 5 characters long.' });
       }
 
+      const ownerSessionId = sessionIdForRequest(req, res);
+      const fileList = Array.isArray(attachedFiles) ? attachedFiles : [];
+      for (const file of fileList) {
+        if (typeof file?.id !== 'string') continue;
+        const existing = (toolDb as any).db.prepare(`
+          SELECT is_local_demo FROM knowledge_documents WHERE id = ?
+        `).get(file.id) as { is_local_demo: number } | undefined;
+        if (existing && !toolDb.getDocument(file.id, ownerSessionId)) {
+          return res.status(403).json({ error: 'An attached document is not accessible to this browser session.' });
+        }
+      }
       const missionId = `m-${Date.now()}-${randomUUID().substring(0, 8)}`;
       const mission = orchestrator!.submitMission(missionId, goal.trim());
+      orchestratorDb.setMissionOwner(missionId, ownerSessionId);
 
       // Persist research parameters and attached files in context memory & knowledge repo
       try {
-        const fileList = Array.isArray(attachedFiles) ? attachedFiles : [];
         toolDb.saveContext(`mission_parameters:${missionId}`, {
           researchMode: researchMode || 'deep',
           webSearch: !!webSearch,
@@ -510,13 +979,13 @@ export function createWebApp(options: WebServerOptions = {}) {
         // Ingest any user-attached documents into knowledge_documents so MCP tools can access them
         for (const file of fileList) {
           const docId = file.id || `doc-att-${Date.now()}-${randomUUID().substring(0, 6)}`;
-          const existing = toolDb.getDocument(docId);
+          const existing = toolDb.getDocument(docId, ownerSessionId);
           if (!existing) {
             const ext = (file.name || 'document').split('.').pop()?.toUpperCase() || 'TXT';
             (toolDb as any).db.prepare(`
               INSERT OR REPLACE INTO knowledge_documents
-              (id, title, file_type, size, pages, category, summary, insights_json, action_items_json, content, is_local_demo, created_at)
-              VALUES (?, ?, ?, ?, ?, 'user_uploads', ?, ?, ?, ?, 0, ?)
+              (id, title, file_type, size, pages, category, summary, insights_json, action_items_json, content, is_local_demo, owner_session_id, created_at)
+              VALUES (?, ?, ?, ?, ?, 'user_uploads', ?, ?, ?, ?, 0, ?, ?)
             `).run(
               docId,
               file.name || 'Attached Document',
@@ -527,6 +996,7 @@ export function createWebApp(options: WebServerOptions = {}) {
               JSON.stringify(file.insights || ['Document ingested for mission context']),
               JSON.stringify(file.actionItems || []),
               file.content || `Attached document content: ${file.name || 'file'}\nAssociated with goal: ${goal}`,
+              ownerSessionId,
               new Date().toISOString()
             );
           }
@@ -544,7 +1014,10 @@ export function createWebApp(options: WebServerOptions = {}) {
           if (!orchestrator!.mcpClient.isConnected()) {
             await orchestrator!.mcpClient.connect();
           }
-          await orchestrator!.executeMissionUntilPause(missionId);
+          await withMcpRequestContext(
+            { sessionId: ownerSessionId },
+            () => orchestrator!.executeMissionUntilPause(missionId)
+          );
           broadcastMissionEvent(missionId, { type: 'state_transition' });
         } catch (err: any) {
           console.error('[ORCHESTRA WEB] Mission execution error:', err);
@@ -567,7 +1040,7 @@ export function createWebApp(options: WebServerOptions = {}) {
   app.get('/api/missions/:id/state', (req: Request, res: Response) => {
     const missionId = String(req.params.id);
     const mission = orchestrator!.db.getMission(missionId);
-    if (!mission) {
+    if (!mission || !canAccessMission(missionId, optionalSessionId(req, res))) {
       return res.status(404).json({ error: 'Mission not found' });
     }
 
@@ -599,13 +1072,16 @@ export function createWebApp(options: WebServerOptions = {}) {
       if (!approval) {
         return res.status(404).json({ error: 'Approval record not found' });
       }
+      const missionId = String(approval.mission_id);
+      const ownerSessionId = optionalSessionId(req, res);
+      if (!canAccessMission(missionId, ownerSessionId)) {
+        return res.status(404).json({ error: 'Approval record not found' });
+      }
 
       const targetFp = expectedFingerprint || fingerprint;
       if (!targetFp) {
         return res.status(400).json({ error: 'Cryptographic parameter fingerprint is required' });
       }
-
-      const missionId = String(approval.mission_id);
 
       // Execute resume with approval
       const resolveRes = orchestrator!.approvalService.resolveApproval(
@@ -640,7 +1116,10 @@ export function createWebApp(options: WebServerOptions = {}) {
             if (!orchestrator!.mcpClient.isConnected()) {
               await orchestrator!.mcpClient.connect();
             }
-            await orchestrator!.executeMissionUntilPause(missionId);
+            await withMcpRequestContext(
+              { sessionId: ownerSessionId },
+              () => orchestrator!.executeMissionUntilPause(missionId)
+            );
             broadcastMissionEvent(missionId, { type: 'state_transition' });
           } catch (err: any) {
             console.error('[ORCHESTRA WEB] Resumption execution error:', err);
@@ -663,6 +1142,9 @@ export function createWebApp(options: WebServerOptions = {}) {
   app.post('/api/missions/:id/clarify', async (req: Request, res: Response) => {
     try {
       const missionId = String(req.params.id);
+      if (!canAccessMission(missionId, optionalSessionId(req, res))) {
+        return res.status(404).json({ error: 'Mission not found' });
+      }
       const { additionalContext } = req.body;
 
       if (!additionalContext || typeof additionalContext !== 'string') {
@@ -690,7 +1172,7 @@ export function createWebApp(options: WebServerOptions = {}) {
   app.get('/api/missions/:id/events', (req: Request, res: Response): void => {
     const missionId = String(req.params.id);
     const mission = orchestrator!.db.getMission(missionId);
-    if (!mission) {
+    if (!mission || !canAccessMission(missionId, optionalSessionId(req, res))) {
       res.status(404).json({ error: 'Mission not found' });
       return;
     }
@@ -749,8 +1231,9 @@ export function createWebApp(options: WebServerOptions = {}) {
   const handleGetKnowledgeDocs = (req: Request, res: Response) => {
     try {
       const docId = (req.params.id as string | undefined) || (req.query.id as string | undefined);
+      const ownerSessionId = optionalSessionId(req, res);
       if (docId) {
-        const doc = toolDb.getDocument(String(docId));
+        const doc = toolDb.getDocument(String(docId), ownerSessionId);
         if (!doc) return res.status(404).json({ error: 'Document not found' });
         let insights: string[] = [];
         let actionItems: string[] = [];
@@ -768,8 +1251,13 @@ export function createWebApp(options: WebServerOptions = {}) {
           }
         });
       }
-      let query = 'SELECT id, title, file_type, size, pages, category, summary, insights_json, action_items_json, content, created_at, is_local_demo FROM knowledge_documents WHERE 1=1';
-      const params: any[] = [];
+      let query = `
+        SELECT id, title, file_type, size, pages, category, summary, insights_json, action_items_json,
+               content, created_at, is_local_demo
+        FROM knowledge_documents
+        WHERE (is_local_demo = 1 OR owner_session_id = ?)
+      `;
+      const params: any[] = [ownerSessionId || null];
       const category = req.query.category as string | undefined;
       const q = req.query.q as string | undefined;
       if (category && category !== 'All' && category !== 'all') {
@@ -817,13 +1305,14 @@ export function createWebApp(options: WebServerOptions = {}) {
       const docContent = content || `Attached document content for ${title}`;
       const docSummary = summary || `Uploaded document: ${title}`;
       const docCategory = category || 'user_uploads';
+      const ownerSessionId = sessionIdForRequest(req, res);
       const insightsList = Array.isArray(insights) ? insights : [`Document ${title} ingested into mission knowledge context.`];
       const actionItemsList = Array.isArray(actionItems) ? actionItems : [];
 
       (toolDb as any).db.prepare(`
         INSERT OR REPLACE INTO knowledge_documents
-        (id, title, file_type, size, pages, category, summary, insights_json, action_items_json, content, is_local_demo, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+        (id, title, file_type, size, pages, category, summary, insights_json, action_items_json, content, is_local_demo, owner_session_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
       `).run(
         docId,
         title,
@@ -835,6 +1324,7 @@ export function createWebApp(options: WebServerOptions = {}) {
         JSON.stringify(insightsList),
         JSON.stringify(actionItemsList),
         docContent,
+        ownerSessionId,
         now
       );
 
@@ -864,103 +1354,149 @@ export function createWebApp(options: WebServerOptions = {}) {
   app.get('/api/documents/:id', handleGetKnowledgeDocs);
   app.post('/api/documents', handleCreateKnowledgeDoc);
 
-  // 5c. Integrations Persistence API (SQLite)
-  app.get('/api/integrations', (_req: Request, res: Response) => {
+  // 5c. OAuth-backed provider connections
+  app.get('/api/integrations', async (req: Request, res: Response) => {
     try {
-      const integrations = orchestratorDb.getIntegrations();
-      return res.json({ integrations });
-    } catch (err: any) {
-      return res.status(500).json({ error: err.message || 'Failed to list integrations' });
+      const sessionId = sessionIdForRequest(req, res);
+      return res.json({ integrations: await integrationService.listStatuses(sessionId) });
+    } catch (error) {
+      const status = error instanceof IntegrationServiceError ? error.statusCode : 500;
+      return res.status(status).json({ error: error instanceof Error ? error.message : 'Could not load provider connections.' });
     }
   });
 
-  const handleUpdateIntegration = (req: Request, res: Response) => {
+  app.post('/api/integrations/google/connect', async (req: Request, res: Response) => {
     try {
-      const id = String(req.params.id);
-      const { connected } = req.body;
-      const integration = orchestratorDb.getIntegration(id);
-      if (!integration) {
-        return res.status(404).json({ error: 'Integration not found' });
-      }
-      orchestratorDb.updateIntegrationStatus(id, !!connected);
+      assertSameOrigin(req);
+      const sessionId = sessionIdForRequest(req, res);
+      const features = Array.isArray(req.body?.features)
+        ? req.body.features.filter((feature: unknown): feature is string => typeof feature === 'string')
+        : [];
+      const authorizationUrl = await integrationService.beginGoogleAuthorization(sessionId, features);
+      return res.json({ authorizationUrl });
+    } catch (error) {
+      const status = error instanceof IntegrationServiceError ? error.statusCode : 500;
+      return res.status(status).json({
+        error: error instanceof Error ? error.message : 'Could not start Google authorization.',
+        code: error instanceof IntegrationServiceError ? error.code : 'INTEGRATION_ERROR'
+      });
+    }
+  });
+
+  app.post('/api/integrations/github/connect', (req: Request, res: Response) => {
+    try {
+      assertSameOrigin(req);
+      const sessionId = sessionIdForRequest(req, res);
+      return res.json({ authorizationUrl: integrationService.beginGitHubAuthorization(sessionId) });
+    } catch (error) {
+      const status = error instanceof IntegrationServiceError ? error.statusCode : 500;
+      return res.status(status).json({
+        error: error instanceof Error ? error.message : 'Could not start GitHub authorization.',
+        code: error instanceof IntegrationServiceError ? error.code : 'INTEGRATION_ERROR'
+      });
+    }
+  });
+
+  const handleOAuthCallback = (provider: ProviderName) => async (req: Request, res: Response) => {
+    try {
+      const sessionId = sessionIdForRequest(req, res);
+      const queryString = (value: unknown): string | undefined => typeof value === 'string' ? value : undefined;
+      await integrationService.completeAuthorization(provider, sessionId, {
+        state: queryString(req.query.state),
+        code: queryString(req.query.code),
+        error: queryString(req.query.error)
+      });
       orchestratorDb.recordActivity({
         id: `act-${Date.now()}-${randomUUID().substring(0, 6)}`,
         eventType: 'Integration',
-        title: !!connected ? `Connected ${integration.name}` : `Disconnected ${integration.name}`,
-        description: `${integration.name} status updated to ${!!connected ? 'connected' : 'disconnected'}`
+        title: `Connected ${provider === 'google' ? 'Google' : 'GitHub'}`,
+        description: `OAuth account authorization succeeded for this browser session.`,
+        ownerSessionId: sessionId
       });
-      const updated = orchestratorDb.getIntegration(id);
-      return res.json({ success: true, integration: updated });
-    } catch (err: any) {
-      return res.status(500).json({ error: err.message || 'Failed to update integration' });
+      return res.redirect('/integrations?oauth=connected');
+    } catch (error) {
+      const code = error instanceof IntegrationServiceError ? error.code : 'PROVIDER_ERROR';
+      return res.redirect(`/integrations?oauth=error&code=${encodeURIComponent(code)}`);
     }
   };
 
-  app.post('/api/integrations/:id/toggle', (req: Request, res: Response) => {
+  app.get('/oauth/google/callback', handleOAuthCallback('google'));
+  app.get('/oauth/github/callback', handleOAuthCallback('github'));
+
+  app.post('/api/integrations/:id/disconnect', async (req: Request, res: Response) => {
     try {
+      assertSameOrigin(req);
       const id = String(req.params.id);
-      const integration = orchestratorDb.getIntegration(id);
-      if (!integration) {
-        return res.status(404).json({ error: 'Integration not found' });
-      }
-      const newStatus = !integration.connected;
-      orchestratorDb.updateIntegrationStatus(id, newStatus);
+      const provider: ProviderName | null = id === 'github'
+        ? 'github'
+        : ['gmail', 'google-calendar', 'google-drive'].includes(id)
+          ? 'google'
+          : null;
+      if (!provider) return res.status(404).json({ error: 'Integration not found.' });
+      const sessionId = sessionIdForRequest(req, res);
+      const result = await integrationService.disconnect(sessionId, provider);
       orchestratorDb.recordActivity({
         id: `act-${Date.now()}-${randomUUID().substring(0, 6)}`,
         eventType: 'Integration',
-        title: newStatus ? `Connected ${integration.name}` : `Disconnected ${integration.name}`,
-        description: `${integration.name} status updated to ${newStatus ? 'connected' : 'disconnected'}`
+        title: `Disconnected ${provider === 'google' ? 'Google' : 'GitHub'}`,
+        description: `Local provider credentials were deleted for this browser session.`,
+        ownerSessionId: sessionId
       });
-      const updated = orchestratorDb.getIntegration(id);
-      return res.json({ success: true, integration: updated });
-    } catch (err: any) {
-      return res.status(500).json({ error: err.message || 'Failed to toggle integration' });
+      return res.json({
+        success: true,
+        ...result,
+        message: result.providerRevoked
+          ? 'Local credentials were removed and provider revocation succeeded.'
+          : 'Local credentials were removed, but provider-side revocation could not be confirmed. Revoke access in the provider account settings.'
+      });
+    } catch (error) {
+      const status = error instanceof IntegrationServiceError ? error.statusCode : 500;
+      return res.status(status).json({ error: error instanceof Error ? error.message : 'Could not disconnect provider.' });
     }
   });
 
-  app.put('/api/integrations/:id', handleUpdateIntegration);
-  app.patch('/api/integrations/:id', handleUpdateIntegration);
-
-  app.post('/api/integrations/reset', (_req: Request, res: Response) => {
-    try {
-      orchestratorDb.resetIntegrations();
-      orchestratorDb.recordActivity({
-        id: `act-${Date.now()}-${randomUUID().substring(0, 6)}`,
-        eventType: 'Integration',
-        title: 'Integrations Reset',
-        description: 'All integrations have been reset to disconnected status in SQLite database'
-      });
-      return res.json({ success: true, integrations: orchestratorDb.getIntegrations() });
-    } catch (err: any) {
-      return res.status(500).json({ error: err.message || 'Failed to reset integrations' });
-    }
-  });
+  app.post('/api/integrations/:id/toggle', (_req: Request, res: Response) =>
+    res.status(410).json({ error: 'Local status toggles are disabled. Use the real provider authorization flow.' })
+  );
+  app.post('/api/integrations/reset', (_req: Request, res: Response) =>
+    res.status(410).json({ error: 'Integration resets are disabled. Disconnect each authorized provider explicitly.' })
+  );
 
   // 5d. Activity Logs API (SQLite)
-  app.get('/api/activity', (req: Request, res: Response) => {
+  app.get('/api/activity', async (req: Request, res: Response) => {
     try {
+      const ownerSessionId = optionalSessionId(req, res);
+      if (!ownerSessionId) return res.status(401).json({ error: 'A signed browser session is required.' });
       const filter = req.query.filter as string | undefined;
-      let query = 'SELECT * FROM activity_events';
-      const params: any[] = [];
+      const scope = `(a.owner_session_id = ? OR a.mission_id IN (
+        SELECT mission_id FROM mission_owners WHERE owner_session_id = ?
+      ))`;
+      let query = `SELECT a.* FROM activity_events a WHERE ${scope}`;
+      const params: any[] = [ownerSessionId, ownerSessionId];
       if (filter && filter !== 'all') {
-        query += ' WHERE lower(event_type) = lower(?)';
+        query += ' AND lower(a.event_type) = lower(?)';
         params.push(filter);
       }
-      query += ' ORDER BY created_at DESC LIMIT 100';
+      query += ' ORDER BY a.created_at DESC LIMIT 100';
       const activities = (orchestratorDb as any).db.prepare(query).all(...params) as any[];
 
-      // Compute dynamic real execution metrics from SQLite
-      let liveToolCalls = 0;
-      let liveMissionsCount = 0;
-      let liveTotalEvents = activities.length;
-      let liveConnectedIntegrations = 0;
-
-      try {
-        liveTotalEvents = (orchestratorDb as any).db.prepare('SELECT COUNT(*) as cnt FROM activity_events').get()?.cnt || 0;
-        liveToolCalls = (orchestratorDb as any).db.prepare('SELECT COUNT(*) as cnt FROM tool_invocation_records').get()?.cnt || 0;
-        liveMissionsCount = (orchestratorDb as any).db.prepare('SELECT COUNT(*) as cnt FROM missions').get()?.cnt || 0;
-        liveConnectedIntegrations = (orchestratorDb as any).db.prepare('SELECT COUNT(*) as cnt FROM integrations WHERE connected = 1').get()?.cnt || 0;
-      } catch {}
+      const eventScope = `
+        (owner_session_id = ? OR mission_id IN (
+          SELECT mission_id FROM mission_owners WHERE owner_session_id = ?
+        ))
+      `;
+      const liveTotalEvents = (orchestratorDb as any).db.prepare(`
+        SELECT COUNT(*) AS cnt FROM activity_events WHERE ${eventScope}
+      `).get(ownerSessionId, ownerSessionId)?.cnt || 0;
+      const liveToolCalls = (orchestratorDb as any).db.prepare(`
+        SELECT COUNT(*) AS cnt FROM tool_invocation_records
+        WHERE mission_id IN (SELECT mission_id FROM mission_owners WHERE owner_session_id = ?)
+      `).get(ownerSessionId)?.cnt || 0;
+      const liveMissionsCount = (orchestratorDb as any).db.prepare(`
+        SELECT COUNT(*) AS cnt FROM mission_owners WHERE owner_session_id = ?
+      `).get(ownerSessionId)?.cnt || 0;
+      const liveConnectedIntegrations = (await integrationService.listStatuses(ownerSessionId))
+        .filter((integration) => integration.status === 'connected').length;
 
       // Category breakdown
       const categoryCounts = {
@@ -970,58 +1506,43 @@ export function createWebApp(options: WebServerOptions = {}) {
         knowledge: 0,
         integration: 0
       };
-      try {
-        const catRows = (orchestratorDb as any).db.prepare('SELECT lower(event_type) as cat, COUNT(*) as cnt FROM activity_events GROUP BY lower(event_type)').all() as any[];
-        for (const row of catRows) {
-          const c = String(row.cat || '').toLowerCase();
-          if (c.includes('conv')) categoryCounts.conversation = row.cnt;
-          else if (c.includes('miss')) categoryCounts.mission = row.cnt;
-          else if (c.includes('tool')) categoryCounts.tool = row.cnt;
-          else if (c.includes('know')) categoryCounts.knowledge = row.cnt;
-          else if (c.includes('integ')) categoryCounts.integration = row.cnt;
-        }
-      } catch {}
+      const catRows = (orchestratorDb as any).db.prepare(`
+        SELECT lower(event_type) AS cat, COUNT(*) AS cnt
+        FROM activity_events WHERE ${eventScope} GROUP BY lower(event_type)
+      `).all(ownerSessionId, ownerSessionId) as any[];
+      for (const row of catRows) {
+        const c = String(row.cat || '').toLowerCase();
+        if (c.includes('conv')) categoryCounts.conversation += row.cnt;
+        else if (c.includes('miss')) categoryCounts.mission += row.cnt;
+        else if (c.includes('tool')) categoryCounts.tool += row.cnt;
+        else if (c.includes('know')) categoryCounts.knowledge += row.cnt;
+        else if (c.includes('integ')) categoryCounts.integration += row.cnt;
+      }
 
-      // Dynamic Top Tools usage
       const topTools: Array<{ name: string; count: number; percent: number }> = [];
-      try {
-        const toolRows = (orchestratorDb as any).db.prepare(`
-          SELECT tool_name, COUNT(*) as cnt 
-          FROM tool_invocation_records 
-          GROUP BY tool_name 
-          ORDER BY cnt DESC 
-          LIMIT 5
-        `).all() as any[];
-
-        if (toolRows.length > 0) {
-          const maxCnt = Math.max(...toolRows.map((r: any) => r.cnt), 1);
-          for (const r of toolRows) {
-            topTools.push({
-              name: r.tool_name.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()),
-              count: r.cnt,
-              percent: Math.round((r.cnt / maxCnt) * 100)
-            });
-          }
+      const toolRows = (orchestratorDb as any).db.prepare(`
+        SELECT tool_name, COUNT(*) AS cnt
+        FROM tool_invocation_records
+        WHERE mission_id IN (SELECT mission_id FROM mission_owners WHERE owner_session_id = ?)
+        GROUP BY tool_name ORDER BY cnt DESC LIMIT 5
+      `).all(ownerSessionId) as any[];
+      if (toolRows.length > 0) {
+        const maxCnt = Math.max(...toolRows.map((row: any) => row.cnt), 1);
+        for (const row of toolRows) {
+          topTools.push({
+            name: row.tool_name.replace(/_/g, ' ').replace(/\b\w/g, (character: string) => character.toUpperCase()),
+            count: row.cnt,
+            percent: Math.round((row.cnt / maxCnt) * 100)
+          });
         }
-      } catch {}
-
-      // If no recorded tool invocations yet, supply canonical tools usage from activities
-      if (topTools.length === 0) {
-        topTools.push(
-          { name: 'Document Analysis', count: 8, percent: 80 },
-          { name: 'Calendar', count: 6, percent: 60 },
-          { name: 'Knowledge Search', count: 5, percent: 50 },
-          { name: 'Data Analysis', count: 4, percent: 40 },
-          { name: 'Notifications', count: 3, percent: 30 }
-        );
       }
 
       return res.json({
         activities,
         stats: {
-          totalActivities: Math.max(liveTotalEvents, activities.length),
-          missionsCount: Math.max(liveMissionsCount, 8),
-          toolActionsCount: Math.max(liveToolCalls, 12),
+          totalActivities: liveTotalEvents,
+          missionsCount: liveMissionsCount,
+          toolActionsCount: liveToolCalls,
           integrationsCount: liveConnectedIntegrations,
           categoryCounts,
           topTools
@@ -1084,7 +1605,10 @@ export function createWebApp(options: WebServerOptions = {}) {
         await orchestrator!.mcpClient.connect();
       }
 
-      const result = await orchestrator!.mcpClient.callTool(toolName, params);
+      const result = await withMcpRequestContext(
+        { sessionId: optionalSessionId(req, res) },
+        () => orchestrator!.mcpClient.callTool(toolName, params)
+      );
       return res.json({
         success: true,
         tool: toolName,
@@ -1095,7 +1619,7 @@ export function createWebApp(options: WebServerOptions = {}) {
     }
   });
 
-  return { app, orchestrator, orchestratorDb, toolDb, broadcastMissionEvent };
+  return { app, orchestrator, orchestratorDb, toolDb, integrationService, authService, broadcastMissionEvent };
 }
 
 // Standalone execution if started directly
@@ -1115,7 +1639,7 @@ if (isMain) {
     await ensureEmbeddedMcpServer({ mcpServerUrl, dbPath });
   }
 
-  const { app, orchestrator, orchestratorDb, toolDb } = createWebApp();
+  const { app, orchestrator, orchestratorDb, toolDb, integrationService, authService } = createWebApp();
 
   // Proactively establish MCP connection
   try {
@@ -1137,6 +1661,8 @@ if (isMain) {
     server.close(() => {
       try { orchestratorDb.close(); } catch {}
       try { toolDb.close(); } catch {}
+      try { integrationService.close(); } catch {}
+      try { authService.close(); } catch {}
       console.log('[ORCHESTRA WEB] Server and databases closed cleanly.');
       process.exit(0);
     });
