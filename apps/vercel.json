@@ -2,7 +2,7 @@
   "rewrites": [
     {
       "source": "/(.*)",
-      "destination": "/index.html"
+      "destination": "https://alexa-orchestra.onrender.com/$1"
     }
   ]
 }

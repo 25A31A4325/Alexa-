@@ -134,6 +134,9 @@ Calendar events, reminders, notifications, analytics, and connector status use p
 
 The Blueprint uses Render's free web-service plan. The filesystem is ephemeral and the service may sleep; local database contents can be lost after restarts or redeploys. Choose a paid Render plan with a persistent disk and set `DB_PATH` to `/data/orchestra.db` if you need durable data.
 
+### Deploying the frontend entry point to Vercel
+The web UI is server-rendered by the Express app on Render, not a standalone static bundle. `apps/vercel.json` configures Vercel to proxy all page, asset, sign-in, and API requests to the Render service, preserving the same authenticated session and backend behavior. Import this repository into Vercel and set the project Root Directory to `apps`; no Vercel environment variables are required. The Render service remains the source of truth for `ORCHESTRA_API_KEY` and MCP/database configuration.
+
 ---
 
 ## 4. First Vertical Slice: Meeting Preparation Mission
