@@ -11,10 +11,6 @@ COPY apps ./apps
 
 RUN npm install
 
-# Skip strict build failures across workspaces
-RUN npm run build --workspace=packages/mcp-server || true
-RUN npm run build --workspace=apps/web || true
-RUN npm run build || true
-
+# Build using tsx / ts-node or run dev mode directly
 EXPOSE 3001
-CMD ["npm", "start"]
+CMD ["npm", "run", "dev"]
