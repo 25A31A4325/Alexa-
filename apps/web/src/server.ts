@@ -28,24 +28,43 @@ export interface WebServerOptions {
 
 let activeEmbeddedMcp: { close: () => Promise<void> } | null = null;
 
+function isSelfHostedMcp(urlStr?: string): boolean {
+  if (!urlStr) return true;
+  return (
+    urlStr.includes('127.0.0.1') ||
+    urlStr.includes('localhost') ||
+    urlStr.includes('0.0.0.0') ||
+    urlStr.includes('onrender.com') ||
+    process.env.RENDER === 'true' ||
+    Boolean(process.env.RENDER_EXTERNAL_HOSTNAME && urlStr.includes(process.env.RENDER_EXTERNAL_HOSTNAME))
+  );
+}
+
+function normalizeMcpUrl(urlStr?: string): string {
+  if (!urlStr) return 'http://127.0.0.1:3001/mcp';
+  let cleaned = urlStr.trim().replace(/\/+$/, '');
+  if (!cleaned.endsWith('/mcp')) {
+    cleaned = `${cleaned}/mcp`;
+  }
+  return cleaned;
+}
+
 export async function ensureEmbeddedMcpServer(options: {
   mcpServerUrl?: string;
   dbPath?: string;
 } = {}): Promise<{ close: () => Promise<void> } | null> {
   if (activeEmbeddedMcp) return activeEmbeddedMcp;
 
-  const mcpServerUrl = options.mcpServerUrl || process.env.MCP_SERVER_URL || 'http://127.0.0.1:3001/mcp';
+  const rawUrl = options.mcpServerUrl || process.env.MCP_SERVER_URL || 'http://127.0.0.1:3001/mcp';
   const dbPath = options.dbPath || process.env.ORCHESTRA_DB_PATH || process.env.DB_PATH || ':memory:';
 
-  const isLocalTarget = mcpServerUrl.includes('127.0.0.1') || mcpServerUrl.includes('localhost');
-  if (!isLocalTarget || process.env.DISABLE_EMBEDDED_MCP === 'true') {
+  if (!isSelfHostedMcp(rawUrl) || process.env.DISABLE_EMBEDDED_MCP === 'true') {
     return null;
   }
 
   try {
-    const parsed = new URL(mcpServerUrl);
-    const mcpPort = Number(parsed.port) || 3001;
-    const endpoint = parsed.pathname || '/mcp';
+    const mcpPort = 3001;
+    const endpoint = '/mcp';
 
     const mcpInstance = createOrchestraServer({
       host: '127.0.0.1',
@@ -93,7 +112,9 @@ export function createWebApp(options: WebServerOptions = {}) {
   const toolDb = options.toolDb || new ToolDatabase(dbPath);
   toolDb.seedDemoKnowledge();
 
-  const mcpServerUrl = options.mcpServerUrl || process.env.MCP_SERVER_URL || 'http://127.0.0.1:3001/mcp';
+  const rawMcpUrl = normalizeMcpUrl(options.mcpServerUrl || process.env.MCP_SERVER_URL || 'http://127.0.0.1:3001/mcp');
+  const mcpServerUrl = isSelfHostedMcp(rawMcpUrl) ? 'http://127.0.0.1:3001/mcp' : rawMcpUrl;
+
   let orchestrator = options.orchestrator;
   if (!orchestrator) {
     orchestrator = new MissionOrchestrator({
@@ -306,7 +327,7 @@ export function createWebApp(options: WebServerOptions = {}) {
 
     try {
       if (!orchestrator!.mcpClient.isConnected()) {
-        if (mcpServerUrl.includes('127.0.0.1') || mcpServerUrl.includes('localhost')) {
+        if (isSelfHostedMcp(mcpServerUrl)) {
           await ensureEmbeddedMcpServer({ mcpServerUrl, dbPath });
         }
         await orchestrator!.mcpClient.connect();
@@ -905,7 +926,7 @@ export function createWebApp(options: WebServerOptions = {}) {
   app.get('/api/tools', async (_req: Request, res: Response) => {
     try {
       if (!orchestrator!.mcpClient.isConnected()) {
-        if (mcpServerUrl.includes('127.0.0.1') || mcpServerUrl.includes('localhost')) {
+        if (isSelfHostedMcp(mcpServerUrl)) {
           await ensureEmbeddedMcpServer({ mcpServerUrl, dbPath });
         }
         await orchestrator!.mcpClient.connect();
@@ -947,7 +968,7 @@ export function createWebApp(options: WebServerOptions = {}) {
       }
 
       if (!orchestrator!.mcpClient.isConnected()) {
-        if (mcpServerUrl.includes('127.0.0.1') || mcpServerUrl.includes('localhost')) {
+        if (isSelfHostedMcp(mcpServerUrl)) {
           await ensureEmbeddedMcpServer({ mcpServerUrl, dbPath });
         }
         await orchestrator!.mcpClient.connect();
@@ -979,8 +1000,8 @@ if (isMain) {
   const mcpServerUrl = process.env.MCP_SERVER_URL || 'http://127.0.0.1:3001/mcp';
   const dbPath = process.env.ORCHESTRA_DB_PATH || process.env.DB_PATH || ':memory:';
 
-  // Proactively auto-start embedded MCP server if targeting local loopback
-  if (mcpServerUrl.includes('127.0.0.1') || mcpServerUrl.includes('localhost')) {
+  // Proactively auto-start embedded MCP server if targeting self-hosted/loopback
+  if (isSelfHostedMcp(mcpServerUrl)) {
     await ensureEmbeddedMcpServer({ mcpServerUrl, dbPath });
   }
 
