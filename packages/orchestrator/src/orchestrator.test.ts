@@ -165,7 +165,7 @@ test('ORCHESTRA Comprehensive Orchestration Engine Test Suite', async (t) => {
     await orch.connect();
 
     const tools = await orch.mcpClient.listTools();
-    assert.equal(tools.length, 11, 'All 11 tools discovered over Streamable HTTP');
+    assert.equal(tools.length, 16, 'All 16 tools discovered over Streamable HTTP');
 
     const res = await orch.mcpClient.callTool('search_knowledge', { query: 'Roadmap' }) as { results: unknown[] };
     assert.ok(res.results.length > 0, 'Physical tool call returned demonstration records');

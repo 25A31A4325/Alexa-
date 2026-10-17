@@ -78,8 +78,8 @@ The sidebar footer permanently displays user credentials matching the visual ref
 - **Document Detail Inspector:** Tabs for *Executive Summary*, *Key Insights*, *Action Items*, and *Raw Markdown Content*.
 
 ### 3.6 Discovered Tools Catalog (`/tools`)
-- Discovers 11 tools directly from MCP server over Streamable HTTP:
-  `search_knowledge`, `fetch_document`, `summarize_notes`, `check_calendar_availability`, `create_calendar_event`, `send_message`, `send_email`, `crm_lookup`, `crm_update_contact`, `get_task_status`, `update_task_record`.
+- Discovers 16 tools directly from MCP server over Streamable HTTP:
+  `search_knowledge`, `retrieve_document`, `analyze_document`, `create_task`, `update_task`, `get_task_status`, `get_conversation_context`, `save_context`, `verify_action`, `detect_conflict`, `validate_result`, `calendar_read_events`, `calendar_create_reminder`, `database_query`, `send_notification`, `list_connected_services`.
 - Classifies risk: Consequential tools requiring human approval are highlighted with amber lock badges; read-only tools with emerald check badges.
 - Formatted Zod JSON schemas are inspectable for every tool.
 
@@ -94,7 +94,7 @@ The sidebar footer permanently displays user credentials matching the visual ref
 
 ### 3.9 Settings & System Configuration (`/settings`)
 - Builder Profile: Shanmukheswar | Pro Builder (Alexa+ Track).
-- MCP Runtime details: Protocol version `2025-11-25`, transport `Streamable HTTP`, endpoint `http://http://127.0.0.1:3001/mcp`.
+- MCP Runtime details: Protocol version `2025-11-25`, transport `Streamable HTTP`, endpoint `http://127.0.0.1:3001/mcp`.
 - Security Guardrails: SHA-256 canonical parameter fingerprinting policy, 300s TTL, 15000ms worker leases.
 
 ---

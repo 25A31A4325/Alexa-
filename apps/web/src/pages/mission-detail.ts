@@ -169,8 +169,8 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
 
   // Fallback demo tasks if database has no tasks yet
   const defaultTasks = [
-    { title: 'Connected to your calendar...', status: 'in_progress', tool_name: 'calendar_read_events' },
-    { title: "Found tomorrow's meeting: Product Roadmap Discussion", status: 'pending', tool_name: 'calendar_read_events' },
+    { title: 'Reading the local demo calendar...', status: 'in_progress', tool_name: 'calendar_read_events' },
+    { title: "Found the demo meeting: Product Roadmap Discussion", status: 'pending', tool_name: 'calendar_read_events' },
     { title: 'Searching for relevant documents...', status: 'pending', tool_name: 'search_knowledge' },
     { title: 'Analyzing document content...', status: 'pending', tool_name: 'verify_action' },
     { title: 'Identifying missing preparation items...', status: 'pending', tool_name: 'verify_action' },
@@ -1027,10 +1027,10 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
           </div>
         </div>
 
-        <!-- Tool 6: document_analysis -->
-        <div class="tool-card p-3.5 bg-slate-50 rounded-xl border border-slate-200 hover:border-blue-300 transition" data-tool-name="document_analysis">
+        <!-- Tool 6: analyze_document -->
+        <div class="tool-card p-3.5 bg-slate-50 rounded-xl border border-slate-200 hover:border-blue-300 transition" data-tool-name="analyze_document">
           <div class="flex items-start justify-between gap-2 mb-1">
-            <span class="font-mono text-xs font-bold text-slate-900">document_analysis</span>
+            <span class="font-mono text-xs font-bold text-slate-900">analyze_document</span>
             <span class="text-[10px] font-semibold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full">Active</span>
           </div>
           <p class="text-xs text-slate-600 leading-snug">Deep document reasoning, key decisions extraction, and risk assessment.</p>

@@ -413,4 +413,112 @@ export function registerAllTools(server: McpServer, db: ToolDatabase): void {
       };
     }
   );
+
+  server.tool(
+    'calendar_read_events',
+    'Reads calendar events from the local demonstration calendar. No external calendar account is accessed.',
+    {
+      startAfter: z.string().optional().describe('Optional inclusive ISO timestamp lower bound'),
+      startBefore: z.string().optional().describe('Optional inclusive ISO timestamp upper bound'),
+      limit: z.number().int().positive().max(50).optional().default(10)
+    },
+    async ({ startAfter, startBefore, limit }) => {
+      const start = Date.now();
+      const events = db.getCalendarEvents({ startAfter, startBefore, limit });
+      const result = {
+        events,
+        totalCount: events.length,
+        externalCalendarAccess: false,
+        is_local_demo: true as const
+      };
+      db.logToolInvocation('calendar_read_events', { startAfter, startBefore, limit }, result, 'success', Date.now() - start);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    'calendar_create_reminder',
+    'Stores a reminder in the local demonstration calendar. It does not create an external calendar alert.',
+    {
+      title: z.string().min(1),
+      reminderTime: z.string().min(1).describe('Requested reminder time as an ISO timestamp or human-readable value'),
+      eventId: z.string().optional().describe('Optional local calendar event ID')
+    },
+    async ({ title, reminderTime, eventId }) => {
+      const start = Date.now();
+      const reminder = db.createCalendarReminder(title, reminderTime, eventId);
+      const result = {
+        reminder,
+        delivery: 'local_demo_only',
+        externalCalendarAccess: false,
+        is_local_demo: true as const
+      };
+      db.logToolInvocation('calendar_create_reminder', { title, reminderTime, eventId }, result, 'success', Date.now() - start);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    'database_query',
+    'Returns safe, predefined analytics from the local demonstration data store; arbitrary SQL is not accepted.',
+    {
+      metric: z.enum(['overview', 'tasks', 'knowledge', 'calendar', 'notifications']).optional().default('overview')
+    },
+    async ({ metric }) => {
+      const start = Date.now();
+      const result = {
+        ...db.queryData(metric),
+        is_local_demo: true as const
+      };
+      db.logToolInvocation('database_query', { metric }, result, 'success', Date.now() - start);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    'send_notification',
+    'Queues a notification in the local demonstration outbox. No email, push alert, or external message is sent.',
+    {
+      channel: z.enum(['email', 'push', 'slack']).optional().default('push'),
+      recipient: z.string().optional().default(''),
+      title: z.string().min(1),
+      message: z.string().min(1)
+    },
+    async ({ channel, recipient, title, message }) => {
+      const start = Date.now();
+      const notification = db.createLocalNotification(channel, recipient, title, message);
+      const result = {
+        notification,
+        delivery: 'queued_local_only',
+        externalDelivery: false,
+        is_local_demo: true as const
+      };
+      db.logToolInvocation('send_notification', { channel, recipient, title, message }, result, 'success', Date.now() - start);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    'list_connected_services',
+    'Lists configured connector records and local toggle state. External provider authentication is not configured.',
+    {},
+    async () => {
+      const start = Date.now();
+      const services = db.getConnectedServices().map((service) => ({
+        id: service.id,
+        name: service.name,
+        category: service.category,
+        locallyEnabled: Boolean(service.connected),
+        is_local_demo: true
+      }));
+      const result = {
+        services,
+        totalCount: services.length,
+        externalProviderAccess: false,
+        is_local_demo: true as const
+      };
+      db.logToolInvocation('list_connected_services', {}, result, 'success', Date.now() - start);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    }
+  );
 }

@@ -63,8 +63,8 @@ In terminal window 1:
 npm run start:mcp-server
 ```
 * **Expected Output:**
-  `[ORCHESTRA MCP Server] Listening on http://http://127.0.0.1:3001/mcp`
-* **Health Check:** `curl http://http://127.0.0.1:3001/mcp` responds with protocol headers (`mcp-session-id`, `content-type: text/event-stream; charset=utf-8`).
+  `[ORCHESTRA MCP Server] Listening on http://127.0.0.1:3001/mcp`
+* **Health Check:** `curl http://127.0.0.1:3001/health` returns the MCP server health status.
 
 #### Step 3: Start the Mission Control Web App (Port 3000)
 In terminal window 2:
@@ -80,7 +80,7 @@ npm run start:web
 If the web app starts while the MCP server is offline:
 * The web UI loads normally and remains fully responsive.
 * Navigating to `/tools` displays a clear, honest alert:
-  `⚠️ MCP Server Offline / Tools Unavailable: Could not dynamically discover tools from the MCP server at http://http://127.0.0.1:3001/mcp.`
+  `⚠️ MCP Server Offline / Tools Unavailable: Could not dynamically discover tools from the MCP server at http://127.0.0.1:3001/mcp.`
 * No mock or hardcoded tools are displayed in place of live discovery.
 
 ---

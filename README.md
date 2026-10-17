@@ -26,10 +26,10 @@ Alexa+/
 │   ├── implementation-plan.md
 │   └── testing.md
 ├── packages/
-│   ├── mcp-server/                     # Self-hosted MCP Server with 11 tools
+│   ├── mcp-server/                     # Self-hosted MCP Server with 16 tools
 │   │   ├── src/
 │   │   │   ├── db.ts                   # Native SQLite persistence & demo seeding
-│   │   │   ├── tools.ts                # 11 strictly typed Zod tool contracts
+│   │   │   ├── tools.ts                # 16 strictly typed Zod tool contracts
 │   │   │   ├── server.ts               # Streamable HTTP Express server factory
 │   │   │   └── index.ts                # Server entrypoint
 │   │   └── tsconfig.json
@@ -100,11 +100,11 @@ npm test
 ```
 
 ### Starting the Applications Locally
-1. Start the MCP Server (`http://http://127.0.0.1:3001/mcp`):
+1. Start the MCP Server (`http://127.0.0.1:3001/mcp`):
 ```bash
 npm run start:mcp-server
 ```
-Health check endpoint: `http://http://127.0.0.1:3001/health`
+Health check endpoint: `http://127.0.0.1:3001/health`
 
 2. Start the Mission Control Web UI (`http://127.0.0.1:3000`):
 ```bash
@@ -122,6 +122,17 @@ docker compose up -d
 * **Web UI:** `http://localhost:3000`
 * **Internal MCP Server:** `http://localhost:3001/mcp` (isolated on internal bridge network)
 * **Persistent Storage:** Named Docker volume `orchestra-data` mounted at `/data`
+
+### Deploying to Render
+This repository includes a Render Blueprint (`render.yaml`) for a Docker-based web service. The web process starts its own Streamable HTTP MCP server on loopback, so the web app and all 16 registered tools run together without a second public service.
+
+Calendar events, reminders, notifications, analytics, and connector status use persistent local demo data. No external provider accounts are authenticated, and queued reminders or notifications are not delivered externally. Consequential actions remain approval-gated.
+
+1. In Render, create a new Blueprint from this repository and apply `render.yaml`.
+2. Set the prompted `ORCHESTRA_API_KEY` secret in Render. The app refuses to start in production without it.
+3. Deploy and open the generated `onrender.com` URL. Render checks `/api/health`; SQLite data is stored on the mounted `/data` disk.
+
+The Blueprint uses Render's free web-service plan. The filesystem is ephemeral and the service may sleep; local database contents can be lost after restarts or redeploys. Choose a paid Render plan with a persistent disk and set `DB_PATH` to `/data/orchestra.db` if you need durable data.
 
 ---
 

@@ -170,6 +170,11 @@ describe('ORCHESTRA Phase 5.1 — UI/Backend Integration & Security Audit', () =
     assert.ok(html.includes('verify_action'), 'Must contain real verify_action tool');
     assert.ok(html.includes('detect_conflict'), 'Must contain real detect_conflict tool');
     assert.ok(html.includes('validate_result'), 'Must contain real validate_result tool');
+    assert.ok(html.includes('calendar_read_events'), 'Must contain real calendar_read_events tool');
+    assert.ok(html.includes('calendar_create_reminder'), 'Must contain real calendar_create_reminder tool');
+    assert.ok(html.includes('database_query'), 'Must contain real database_query tool');
+    assert.ok(html.includes('send_notification'), 'Must contain real send_notification tool');
+    assert.ok(html.includes('list_connected_services'), 'Must contain real list_connected_services tool');
 
     // Confirm that hypothetical nonexistent tools do NOT appear as available
     assert.ok(!html.includes('data-tool-name="send_message"'), 'Must NOT list nonexistent send_message tool');
@@ -707,6 +712,20 @@ describe('ORCHESTRA Phase 5.1 — UI/Backend Integration & Security Audit', () =
     assert.equal(gatedRes.status, 403);
     const gatedData = await gatedRes.json() as any;
     assert.ok(gatedData.error.includes('Consequential action blocked by policy gate'));
+
+    const reminderRes = await fetch(`${webBaseUrl}/api/tools/calendar_create_reminder/execute`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Demo reminder', reminderTime: 'Tomorrow at 9 AM' })
+    });
+    assert.equal(reminderRes.status, 403, 'Reminder writes must remain behind mission approval');
+
+    const notificationRes = await fetch(`${webBaseUrl}/api/tools/send_notification/execute`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Demo alert', message: 'Local demo notification' })
+    });
+    assert.equal(notificationRes.status, 403, 'Notification actions must remain behind mission approval');
   });
 
   // =========================================================================
@@ -974,4 +993,3 @@ describe('ORCHESTRA Phase 5.1 — UI/Backend Integration & Security Audit', () =
     assert.ok(homeHtml.includes("sessionStorage.setItem('hasSeenIntro', 'true')"), 'Completion must mark hasSeenIntro in session store');
   });
 });
-

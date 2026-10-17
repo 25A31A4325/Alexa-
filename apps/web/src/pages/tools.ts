@@ -48,10 +48,25 @@ export function classifyTool(toolName: string): {
       consequential: false,
       category: 'Task'
     },
+    database_query: {
+      classification: 'Read-Only (Local Analytics)',
+      consequential: false,
+      category: 'Data'
+    },
     detect_conflict: {
       classification: 'Read-Only (Conflict Detection)',
       consequential: false,
       category: 'Calendar'
+    },
+    calendar_read_events: {
+      classification: 'Read-Only (Local Calendar)',
+      consequential: false,
+      category: 'Calendar'
+    },
+    list_connected_services: {
+      classification: 'Read-Only (Connector Registry)',
+      consequential: false,
+      category: 'External Services'
     },
     validate_result: {
       classification: 'Read-Only (Verification Engine)',
@@ -74,19 +89,19 @@ export function classifyTool(toolName: string): {
       category: 'Context'
     },
     calendar_create_reminder: {
-      classification: 'Consequential Action (Calendar Mutation)',
+      classification: 'Consequential Action (Approval-Gated Reminder)',
       consequential: true,
       category: 'Calendar'
+    },
+    send_notification: {
+      classification: 'Consequential Action (Approval-Gated Notification)',
+      consequential: true,
+      category: 'Communication'
     },
     calendar_create_event: {
       classification: 'Consequential Action (Calendar Event)',
       consequential: true,
       category: 'Calendar'
-    },
-    send_notification: {
-      classification: 'Consequential Action (Outbound Alert)',
-      consequential: true,
-      category: 'Communication'
     },
     email_checklist: {
       classification: 'Consequential Action (Outbound Email)',
@@ -141,9 +156,9 @@ export function renderToolsPage(options: ToolsPageOptions = {}): string {
       badgeClass: 'bg-purple-50 text-purple-700 border-purple-200/60',
       iconBg: 'bg-blue-50 border-blue-100 text-blue-500',
       iconSvg: `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>`,
-      desc: 'Check upcoming meetings, events and details from your connected calendar.',
-      mcpTool: 'detect_conflict',
-      secondaryMcp: 'calendar_read_events',
+      desc: 'Read local demo events and detect schedule conflicts; no external calendar is connected.',
+      mcpTool: 'calendar_read_events',
+      secondaryMcp: 'detect_conflict',
       isConsequential: false
     },
     {
@@ -177,9 +192,9 @@ export function renderToolsPage(options: ToolsPageOptions = {}): string {
       badgeClass: 'bg-purple-50 text-purple-700 border-purple-200/60',
       iconBg: 'bg-purple-50 border-purple-100 text-purple-600',
       iconSvg: `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"></path></svg>`,
-      desc: 'Query data, analyze trends and generate reports.',
-      mcpTool: 'get_task_status',
-      secondaryMcp: 'database_query',
+      desc: 'Analyze tasks, knowledge records, and local demo event data.',
+      mcpTool: 'database_query',
+      secondaryMcp: 'get_task_status',
       isConsequential: false
     },
     {
@@ -189,10 +204,10 @@ export function renderToolsPage(options: ToolsPageOptions = {}): string {
       badgeClass: 'bg-purple-50 text-purple-700 border-purple-200/60',
       iconBg: 'bg-sky-50 border-sky-100 text-sky-500',
       iconSvg: `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"></path></svg>`,
-      desc: 'Set reminders and send notifications across connected services.',
+      desc: 'Queue local demo reminders and notifications; nothing is sent to external services.',
       mcpTool: 'calendar_create_reminder',
-      secondaryMcp: 'detect_conflict',
-      isConsequential: false
+      secondaryMcp: 'send_notification',
+      isConsequential: true
     },
     {
       id: 'conversation-context',
@@ -225,16 +240,16 @@ export function renderToolsPage(options: ToolsPageOptions = {}): string {
       badgeClass: 'bg-purple-50 text-purple-700 border-purple-200/60',
       iconBg: 'bg-purple-50 border-purple-100 text-purple-600',
       iconSvg: `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>`,
-      desc: 'Access and work with your connected accounts and APIs.',
-      mcpTool: 'detect_conflict',
-      secondaryMcp: 'search_knowledge',
+      desc: 'Inspect configured connector records; external provider authentication is not configured.',
+      mcpTool: 'list_connected_services',
+      secondaryMcp: '',
       isConsequential: false
     }
   ];
 
   // Dynamically augment catalog with any tools discovered from MCP server
   if (serverOnline && tools.length > 0) {
-    const knownMcpTools = new Set(catalogTools.map(c => c.mcpTool));
+    const knownMcpTools = new Set(catalogTools.flatMap(c => [c.mcpTool, c.secondaryMcp]).filter(Boolean));
     const extraDiscoveredTools = tools.filter(t => !knownMcpTools.has(t.name));
 
     extraDiscoveredTools.forEach((t) => {
@@ -262,7 +277,7 @@ export function renderToolsPage(options: ToolsPageOptions = {}): string {
         <div class="text-3xl">⚠️</div>
         <h3 class="text-base font-bold text-rose-800">MCP Server Offline / Tools Unavailable</h3>
         <p class="text-xs text-slate-600 max-w-xl mx-auto leading-relaxed">
-          Could not dynamically discover tools from the MCP server at <code class="bg-slate-100 px-1.5 py-0.5 rounded text-rose-800 font-mono">http://http://127.0.0.1:3001/mcp</code>.
+          Could not dynamically discover tools from the MCP server at <code class="bg-slate-100 px-1.5 py-0.5 rounded text-rose-800 font-mono">http://127.0.0.1:3001/mcp</code>.
           ${errorMessage ? `<br><span class="text-rose-600 font-mono mt-1 block">Error: ${errorMessage}</span>` : ''}
         </p>
         <p class="text-xs font-bold text-slate-700">0 Tools Available</p>
@@ -639,7 +654,7 @@ export function renderToolsPage(options: ToolsPageOptions = {}): string {
           <div class="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-200">
             <div>
               <span class="text-xs font-bold text-slate-800 block">MCP Server Endpoint</span>
-              <span class="text-[11px] font-mono text-slate-500">http://http://127.0.0.1:3001/mcp</span>
+              <span class="text-[11px] font-mono text-slate-500">http://127.0.0.1:3001/mcp</span>
             </div>
             <span class="text-[10px] font-bold px-2 py-0.5 rounded-full ${serverOnline ? 'bg-emerald-100 text-emerald-700 border border-emerald-200' : 'bg-rose-100 text-rose-700 border border-rose-200'}">
               ${serverOnline ? '● CONNECTED' : '○ OFFLINE'}
@@ -768,6 +783,16 @@ export function renderToolsPage(options: ToolsPageOptions = {}): string {
             paramsEl.value = JSON.stringify({ items: [{ id: 'meeting-1', timeSlot: '10:00 AM - 11:00 AM', topic: 'Product Roadmap Discussion' }, { id: 'focus-time', timeSlot: '02:00 PM - 03:00 PM', topic: 'Architecture Focus' }] }, null, 2);
           } else if (mcpTool === 'verify_action') {
             paramsEl.value = JSON.stringify({ actionType: 'calendar_create_reminder', parameters: { title: 'Prep for meeting', reminderTime: 'Tomorrow at 09:30 AM' } }, null, 2);
+          } else if (mcpTool === 'calendar_create_reminder') {
+            paramsEl.value = JSON.stringify({ title: 'Prepare for product roadmap meeting', reminderTime: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), eventId: 'demo-roadmap-meeting' }, null, 2);
+          } else if (mcpTool === 'database_query') {
+            paramsEl.value = JSON.stringify({ metric: 'overview' }, null, 2);
+          } else if (mcpTool === 'calendar_read_events') {
+            paramsEl.value = JSON.stringify({ limit: 10 }, null, 2);
+          } else if (mcpTool === 'send_notification') {
+            paramsEl.value = JSON.stringify({ channel: 'push', title: 'Demo notification', message: 'This notification is queued locally and is not sent externally.' }, null, 2);
+          } else if (mcpTool === 'list_connected_services') {
+            paramsEl.value = JSON.stringify({}, null, 2);
           } else if (mcpTool === 'validate_result') {
             paramsEl.value = JSON.stringify({ originalGoal: 'Prepare for meeting', executedSteps: ['step-1', 'step-2', 'step-3'], deliverables: { briefing: 'complete' } }, null, 2);
           } else {

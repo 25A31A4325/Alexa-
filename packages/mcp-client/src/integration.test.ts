@@ -43,7 +43,7 @@ test('ORCHESTRA MCP Streamable HTTP Integration Test Suite', async (t) => {
   });
 
   // TC-MCP-02: Client discovers the registered tools over MCP
-  await t.test('TC-MCP-02: Client discovers all 11 registered tools dynamically', async () => {
+  await t.test('TC-MCP-02: Client discovers all 16 registered tools dynamically', async () => {
     const client = new OrchestraMcpClient({ serverUrl: TEST_URL });
     await client.connect();
     const tools = await client.listTools();
@@ -60,13 +60,18 @@ test('ORCHESTRA MCP Streamable HTTP Integration Test Suite', async (t) => {
       'save_context',
       'verify_action',
       'detect_conflict',
-      'validate_result'
+      'validate_result',
+      'calendar_read_events',
+      'calendar_create_reminder',
+      'database_query',
+      'send_notification',
+      'list_connected_services'
     ];
 
     for (const expected of expectedTools) {
       assert.ok(toolNames.includes(expected), `Tool '${expected}' was discovered over MCP`);
     }
-    assert.equal(tools.length, 11, 'Exactly 11 tools discovered over MCP boundary');
+    assert.equal(tools.length, 16, 'All 16 tools discovered over MCP boundary');
     await client.close();
   });
 
@@ -208,6 +213,52 @@ test('ORCHESTRA MCP Streamable HTTP Integration Test Suite', async (t) => {
       `Protocol version '${version}' is compatible with standard`
     );
     assert.equal(version, '2025-11-25', 'Negotiated version is 2025-11-25 as required');
+    await client.close();
+  });
+
+  await t.test('TC-MCP-12: Calendar, analytics, notifications, and connector tools work on local demo data', async () => {
+    const client = new OrchestraMcpClient({ serverUrl: TEST_URL });
+    await client.connect();
+
+    const calendar = await client.callTool('calendar_read_events', {}) as {
+      events: Array<{ id: string; title: string }>;
+      externalCalendarAccess: boolean;
+      is_local_demo: boolean;
+    };
+    assert.equal(calendar.events[0]!.id, 'demo-roadmap-meeting');
+    assert.equal(calendar.externalCalendarAccess, false);
+    assert.equal(calendar.is_local_demo, true);
+
+    const reminder = await client.callTool('calendar_create_reminder', {
+      title: 'Prepare for roadmap meeting',
+      reminderTime: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      eventId: 'demo-roadmap-meeting'
+    }) as { reminder: { status: string }; delivery: string };
+    assert.equal(reminder.reminder.status, 'scheduled_local');
+    assert.equal(reminder.delivery, 'local_demo_only');
+
+    const notification = await client.callTool('send_notification', {
+      channel: 'email',
+      recipient: 'demo@example.test',
+      title: 'Roadmap reminder',
+      message: 'This is a local demo notification.'
+    }) as { notification: { status: string }; delivery: string };
+    assert.equal(notification.notification.status, 'queued_local');
+    assert.equal(notification.delivery, 'queued_local_only');
+
+    const analytics = await client.callTool('database_query', { metric: 'calendar' }) as {
+      reminders: { count: number };
+      is_local_demo: boolean;
+    };
+    assert.equal(analytics.reminders.count, 1);
+    assert.equal(analytics.is_local_demo, true);
+
+    const services = await client.callTool('list_connected_services', {}) as {
+      services: unknown[];
+      externalProviderAccess: boolean;
+    };
+    assert.ok(services.services.length > 0);
+    assert.equal(services.externalProviderAccess, false);
     await client.close();
   });
 });

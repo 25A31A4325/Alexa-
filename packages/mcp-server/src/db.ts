@@ -1,4 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
+import { randomUUID } from 'node:crypto';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 
@@ -44,6 +45,46 @@ export interface ToolInvocationRow {
   status: string;
   duration_ms: number;
   invoked_at: string;
+}
+
+export interface CalendarEventRow {
+  id: string;
+  title: string;
+  starts_at: string;
+  ends_at: string;
+  location: string;
+  description: string;
+  is_local_demo: number;
+}
+
+export interface CalendarReminderRow {
+  id: string;
+  event_id: string | null;
+  title: string;
+  remind_at: string;
+  status: string;
+  created_at: string;
+  is_local_demo: number;
+}
+
+export interface NotificationRow {
+  id: string;
+  channel: string;
+  recipient: string;
+  title: string;
+  message: string;
+  status: string;
+  created_at: string;
+  is_local_demo: number;
+}
+
+export interface ConnectedServiceRow {
+  id: string;
+  name: string;
+  category: string;
+  connected: number;
+  is_local_demo: number;
+  updated_at: string;
 }
 
 export class ToolDatabase {
@@ -106,7 +147,93 @@ export class ToolDatabase {
         duration_ms INTEGER NOT NULL,
         invoked_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS calendar_events (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        starts_at TEXT NOT NULL,
+        ends_at TEXT NOT NULL,
+        location TEXT NOT NULL DEFAULT '',
+        description TEXT NOT NULL DEFAULT '',
+        is_local_demo INTEGER NOT NULL DEFAULT 1
+      );
+
+      CREATE TABLE IF NOT EXISTS calendar_reminders (
+        id TEXT PRIMARY KEY,
+        event_id TEXT,
+        title TEXT NOT NULL,
+        remind_at TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'scheduled_local',
+        created_at TEXT NOT NULL,
+        is_local_demo INTEGER NOT NULL DEFAULT 1,
+        FOREIGN KEY (event_id) REFERENCES calendar_events(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS notifications (
+        id TEXT PRIMARY KEY,
+        channel TEXT NOT NULL,
+        recipient TEXT NOT NULL DEFAULT '',
+        title TEXT NOT NULL,
+        message TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'queued_local',
+        created_at TEXT NOT NULL,
+        is_local_demo INTEGER NOT NULL DEFAULT 1
+      );
+
+      CREATE TABLE IF NOT EXISTS integrations (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        category TEXT NOT NULL,
+        connected INTEGER NOT NULL DEFAULT 0,
+        is_local_demo INTEGER NOT NULL DEFAULT 0,
+        config_json TEXT NOT NULL DEFAULT '{}',
+        updated_at TEXT NOT NULL
+      );
     `);
+  }
+
+  public seedDemoCalendar(): void {
+    const startsAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    startsAt.setUTCHours(10, 0, 0, 0);
+    const endsAt = new Date(startsAt.getTime() + 60 * 60 * 1000);
+    this.db.prepare(`
+      INSERT OR IGNORE INTO calendar_events
+      (id, title, starts_at, ends_at, location, description, is_local_demo)
+      VALUES (?, ?, ?, ?, ?, ?, 1)
+    `).run(
+      'demo-roadmap-meeting',
+      'Product Roadmap Discussion',
+      startsAt.toISOString(),
+      endsAt.toISOString(),
+      'Google Meet (demo)',
+      'Local demonstration calendar event; no external calendar is connected.'
+    );
+  }
+
+  public seedDemoIntegrations(): void {
+    const existing = this.db.prepare('SELECT COUNT(*) as cnt FROM integrations').get() as { cnt: number };
+    if (existing.cnt > 0) return;
+
+    const integrations = [
+      { id: 'google-calendar', name: 'Google Calendar', category: 'Productivity', isDemo: 1 },
+      { id: 'google-drive', name: 'Google Drive', category: 'Knowledge', isDemo: 0 },
+      { id: 'gmail', name: 'Gmail', category: 'Communication', isDemo: 0 },
+      { id: 'notion', name: 'Notion', category: 'Knowledge', isDemo: 0 },
+      { id: 'slack', name: 'Slack', category: 'Communication', isDemo: 1 },
+      { id: 'github', name: 'GitHub', category: 'Development', isDemo: 0 },
+      { id: 'google-maps', name: 'Google Maps', category: 'Data', isDemo: 0 },
+      { id: 'microsoft-outlook', name: 'Microsoft Outlook', category: 'Productivity', isDemo: 0 },
+      { id: 'figma', name: 'Figma', category: 'Development', isDemo: 0 }
+    ];
+    const now = new Date().toISOString();
+    const insert = this.db.prepare(`
+      INSERT OR IGNORE INTO integrations
+      (id, name, category, connected, is_local_demo, config_json, updated_at)
+      VALUES (?, ?, ?, 0, ?, '{}', ?)
+    `);
+    for (const integration of integrations) {
+      insert.run(integration.id, integration.name, integration.category, integration.isDemo, now);
+    }
   }
 
   public seedDemoKnowledge(force: boolean = false): void {
@@ -284,6 +411,97 @@ export class ToolDatabase {
 
   public getTasksByMission(missionId: string): TaskRow[] {
     return this.db.prepare('SELECT * FROM tasks WHERE mission_id = ? ORDER BY created_at ASC').all(missionId) as unknown as TaskRow[];
+  }
+
+  public getCalendarEvents(options: { startAfter?: string; startBefore?: string; limit?: number } = {}): CalendarEventRow[] {
+    let query = 'SELECT * FROM calendar_events WHERE 1 = 1';
+    const params: (string | number)[] = [];
+    if (options.startAfter) {
+      query += ' AND starts_at >= ?';
+      params.push(options.startAfter);
+    }
+    if (options.startBefore) {
+      query += ' AND starts_at <= ?';
+      params.push(options.startBefore);
+    }
+    query += ' ORDER BY starts_at ASC LIMIT ?';
+    params.push(options.limit ?? 10);
+    return this.db.prepare(query).all(...params) as unknown as CalendarEventRow[];
+  }
+
+  public createCalendarReminder(title: string, remindAt: string, eventId?: string): CalendarReminderRow {
+    if (eventId && !this.db.prepare('SELECT id FROM calendar_events WHERE id = ?').get(eventId)) {
+      throw new Error(`Calendar event '${eventId}' was not found in the local demo calendar.`);
+    }
+
+    const id = `reminder-${randomUUID()}`;
+    const createdAt = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO calendar_reminders (id, event_id, title, remind_at, status, created_at, is_local_demo)
+      VALUES (?, ?, ?, ?, 'scheduled_local', ?, 1)
+    `).run(id, eventId ?? null, title, remindAt, createdAt);
+    return this.db.prepare('SELECT * FROM calendar_reminders WHERE id = ?').get(id) as unknown as CalendarReminderRow;
+  }
+
+  public createLocalNotification(
+    channel: string,
+    recipient: string,
+    title: string,
+    message: string
+  ): NotificationRow {
+    const id = `notification-${randomUUID()}`;
+    const createdAt = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO notifications (id, channel, recipient, title, message, status, created_at, is_local_demo)
+      VALUES (?, ?, ?, ?, ?, 'queued_local', ?, 1)
+    `).run(id, channel, recipient, title, message, createdAt);
+    return this.db.prepare('SELECT * FROM notifications WHERE id = ?').get(id) as unknown as NotificationRow;
+  }
+
+  public queryData(metric: 'overview' | 'tasks' | 'knowledge' | 'calendar' | 'notifications'): Record<string, unknown> {
+    if (metric === 'tasks') {
+      const statuses = this.db.prepare(`
+        SELECT status, COUNT(*) as count FROM tasks GROUP BY status ORDER BY status
+      `).all();
+      return { metric, total: this.db.prepare('SELECT COUNT(*) as count FROM tasks').get(), statuses };
+    }
+    if (metric === 'knowledge') {
+      const categories = this.db.prepare(`
+        SELECT category, COUNT(*) as count FROM knowledge_documents GROUP BY category ORDER BY category
+      `).all();
+      return { metric, total: this.db.prepare('SELECT COUNT(*) as count FROM knowledge_documents').get(), categories };
+    }
+    if (metric === 'calendar') {
+      return {
+        metric,
+        events: this.db.prepare('SELECT COUNT(*) as count FROM calendar_events').get(),
+        reminders: this.db.prepare('SELECT COUNT(*) as count FROM calendar_reminders').get()
+      };
+    }
+    if (metric === 'notifications') {
+      const statuses = this.db.prepare(`
+        SELECT status, COUNT(*) as count FROM notifications GROUP BY status ORDER BY status
+      `).all();
+      return { metric, total: this.db.prepare('SELECT COUNT(*) as count FROM notifications').get(), statuses };
+    }
+
+    return {
+      metric: 'overview',
+      counts: {
+        tasks: this.db.prepare('SELECT COUNT(*) as count FROM tasks').get(),
+        knowledgeDocuments: this.db.prepare('SELECT COUNT(*) as count FROM knowledge_documents').get(),
+        calendarEvents: this.db.prepare('SELECT COUNT(*) as count FROM calendar_events').get(),
+        reminders: this.db.prepare('SELECT COUNT(*) as count FROM calendar_reminders').get(),
+        notifications: this.db.prepare('SELECT COUNT(*) as count FROM notifications').get()
+      }
+    };
+  }
+
+  public getConnectedServices(): ConnectedServiceRow[] {
+    return this.db.prepare(`
+      SELECT id, name, category, connected, is_local_demo, updated_at
+      FROM integrations ORDER BY id ASC
+    `).all() as unknown as ConnectedServiceRow[];
   }
 
   // --- Context Memory Methods ---

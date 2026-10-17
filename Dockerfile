@@ -11,10 +11,9 @@ COPY apps ./apps
 
 RUN npm install --legacy-peer-deps
 
-# Build mcp-server first so its dist/ files exist for apps/web
-RUN npm run build --workspace=packages/mcp-server || true
+# Build all workspaces before starting the production entrypoint
+RUN npm run build
 
-EXPOSE 3001
+EXPOSE 3000
 
-# Start web app directly using tsx
-CMD ["npx", "tsx", "apps/web/src/server.ts"]
+CMD ["npm", "start"]

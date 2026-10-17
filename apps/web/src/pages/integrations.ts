@@ -504,7 +504,7 @@ export function renderIntegrationsPage(db?: OrchestratorDatabase): string {
             </div>
             <div class="flex justify-between items-center">
               <span class="text-slate-500 font-medium">Gateway Endpoint</span>
-              <span class="font-mono text-[11px] text-blue-600">http://http://127.0.0.1:3001/mcp</span>
+              <span class="font-mono text-[11px] text-blue-600">http://127.0.0.1:3001/mcp</span>
             </div>
           </div>
 

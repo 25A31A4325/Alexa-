@@ -507,7 +507,7 @@ export function renderSettingsPage(): string {
               <span class="font-medium text-slate-700">Streamable HTTP Transport Protocol</span>
               <span class="text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">v2025-11-25</span>
             </div>
-            <p class="text-[11px] text-slate-500">Connected to local MCP endpoint at http://http://127.0.0.1:3001/mcp with full tool discovery and execution streaming.</p>
+            <p class="text-[11px] text-slate-500">Connected to local MCP endpoint at http://127.0.0.1:3001/mcp with full tool discovery and execution streaming.</p>
           </div>
         </div>
 

@@ -260,13 +260,13 @@ export function renderResultsPage(db: OrchestratorDatabase): string {
         <h3 class="text-sm font-bold text-slate-900">Tool Execution Telemetry</h3>
         <div class="space-y-2 text-xs font-mono">
           <div class="p-3 bg-slate-50 rounded-xl border border-slate-200 text-slate-700">
-            [10:12:02] calendar_read_events -> 1 event parsed (320ms)
+            [10:12:02] calendar_read_events -> 1 local demo event parsed (320ms)
           </div>
           <div class="p-3 bg-slate-50 rounded-xl border border-slate-200 text-slate-700">
             [10:12:05] search_knowledge -> 2 documents indexed (520ms)
           </div>
           <div class="p-3 bg-slate-50 rounded-xl border border-slate-200 text-slate-700">
-            [10:12:18] document_analysis -> 4 decisions & 2 risks extracted (1200ms)
+            [10:12:18] analyze_document -> 4 decisions & 2 risks extracted (1200ms)
           </div>
           <div class="p-3 bg-slate-50 rounded-xl border border-slate-200 text-slate-700">
             [10:12:24] verify_action -> Verification passed (Confidence 94%)

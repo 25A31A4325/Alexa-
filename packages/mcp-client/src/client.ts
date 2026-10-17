@@ -31,7 +31,7 @@ export class OrchestraMcpClient {
   private serverUrl: string;
 
   constructor(config: McpClientConfig = {}) {
-    this.serverUrl = config.serverUrl || process.env.MCP_SERVER_URL || 'http://http://127.0.0.1:3001/mcp';
+    this.serverUrl = config.serverUrl || process.env.MCP_SERVER_URL || 'http://127.0.0.1:3001/mcp';
     this.client = new Client({
       name: config.clientName || 'orchestra-client',
       version: config.clientVersion || '1.0.0'

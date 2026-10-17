@@ -20,11 +20,11 @@ This implementation plan defines small, verifiable, sequential stages. Advancing
 ## Stage 2: Self-Hosted MCP Server with Streamable HTTP
 * **Files / Modules:**
   * `packages/mcp-server/src/server.ts`
-  * `packages/mcp-server/src/tools/*.ts` (all 11 domain tools)
+  * `packages/mcp-server/src/tools.ts` (all 16 domain tools)
   * `packages/mcp-server/src/demo-data.ts` (explicitly labeled demonstration documents and records)
-* **Expected Behavior:** Server starts on `http://127.0.0.1:3001`, mounts `/mcp` using `StreamableHTTPServerTransport`, defends Host header, and registers all 11 tools.
+* **Expected Behavior:** Server starts on the configured host and port, mounts `/mcp` using `StreamableHTTPServerTransport`, and registers all 16 local/demo-backed tools.
 * **Acceptance Criteria:** Responds to JSON-RPC 2.0 initialize request; returns tools via `tools/list`.
-* **Automated Tests:** `packages/mcp-server/test/server.test.ts` testing server initialization and tool registry.
+* **Automated Tests:** `packages/mcp-client/src/integration.test.ts` verifies server initialization, tool discovery, and tool execution.
 * **Rollback:** Terminate port 3001 process.
 
 ---

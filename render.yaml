@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: alexa-orchestra
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DB_PATH
+        value: /tmp/orchestra.db
+      - key: ALLOW_INSECURE_NO_AUTH
+        value: "false"
+      - key: ORCHESTRA_API_KEY
+        sync: false

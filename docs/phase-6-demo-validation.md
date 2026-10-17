@@ -132,7 +132,7 @@ In terminal 1:
 ```bash
 npm run start:mcp-server
 ```
-* **Output:** `[ORCHESTRA MCP Server] Listening on http://http://127.0.0.1:3001/mcp`
+* **Output:** `[ORCHESTRA MCP Server] Listening on http://127.0.0.1:3001/mcp`
 * **Protocol:** Official Model Context Protocol `2025-11-25`.
 
 #### 3. Start Mission Control Web UI (Port 3000)

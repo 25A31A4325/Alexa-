@@ -9,10 +9,10 @@ export function renderPlanPage(db: OrchestratorDatabase): string {
   const dbTasks = activeMission ? db.getTasksForMission(activeMission.id) : [];
 
   const defaultSteps = [
-    { num: 1, title: 'Check calendar and meeting details', desc: 'Query calendar API for tomorrow 10:00 AM meeting "Product Roadmap Discussion"', status: 'in_progress', time: 'Running', tool: 'calendar_read_events' },
-    { num: 2, title: 'Identify attendee profiles and agenda requirements', desc: 'Scan attendee list, past meeting notes, and sync requirements', status: 'pending', time: 'Pending', tool: 'calendar_read_events' },
+    { num: 1, title: 'Check calendar and meeting details', desc: 'Read the local demonstration calendar event and meeting details', status: 'in_progress', time: 'Running', tool: 'calendar_read_events' },
+    { num: 2, title: 'Identify attendee profiles and agenda requirements', desc: 'Use the local demonstration meeting record and stored knowledge', status: 'pending', time: 'Pending', tool: 'calendar_read_events' },
     { num: 3, title: 'Search knowledge base for Q4 Product Roadmap specifications', desc: 'Retrieve Q4_Roadmap.pdf and Competitor_Analysis.docx from internal store', status: 'pending', time: 'Pending', tool: 'search_knowledge' },
-    { num: 4, title: 'Analyze document content, decisions, and risk items', desc: 'Deep document extraction for key decisions, milestones, and open questions', status: 'pending', time: 'Pending', tool: 'document_analysis' },
+    { num: 4, title: 'Analyze document content, decisions, and risk items', desc: 'Deep document extraction for key decisions, milestones, and open questions', status: 'pending', time: 'Pending', tool: 'analyze_document' },
     { num: 5, title: 'Create prioritized preparation checklist', desc: 'Synthesize gap analysis into 4 actionable prep items with priority scoring', status: 'pending', time: 'Pending', tool: 'create_task' },
     { num: 6, title: 'Draft notification reminders for key stakeholders', desc: 'Schedule alarm notifications and calendar alert offsets (requires approval gate)', status: 'pending', time: 'Pending', tool: 'calendar_create_reminder' },
     { num: 7, title: 'Finalize and independently verify deliverable integrity', desc: 'Autonomous verification engine evaluating contract coverage and audit proofs', status: 'pending', time: 'Pending', tool: 'verify_action' },

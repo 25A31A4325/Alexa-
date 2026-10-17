@@ -10,7 +10,7 @@ All tests execute against the physical MCP client/server boundary and SQLite dat
 | Test ID | Category | Objective | Result |
 |---|---|---|---|
 | `TC-MCP-01` | Protocol | Connects to server over Streamable HTTP | **PASS** |
-| `TC-MCP-02` | Discovery | Discovers all 11 registered tools dynamically | **PASS** |
+| `TC-MCP-02` | Discovery | Discovers all 16 registered tools dynamically | **PASS** |
 | `TC-MCP-03` | Invocation | Calls `search_knowledge` & receives demo docs | **PASS** |
 | `TC-MCP-04` | Invocation | Calls `retrieve_document` & receives content | **PASS** |
 | `TC-MCP-05` | Persistence| Calls `create_task` & confirms SQLite storage | **PASS** |
@@ -20,6 +20,7 @@ All tests execute against the physical MCP client/server boundary and SQLite dat
 | `TC-MCP-09` | Recovery | Persisted records survive server restart | **PASS** |
 | `TC-MCP-10` | Error | Server reports error when handler fails | **PASS** |
 | `TC-MCP-11` | Protocol | Negotiates `2025-11-25` protocol version | **PASS** |
+| `TC-MCP-12` | Demo tools | Calendar, analytics, notification queue, and connector registry operate on local data | **PASS** |
 
 ---
 
