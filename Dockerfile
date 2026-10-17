@@ -9,13 +9,9 @@ COPY tsconfig*.json ./
 COPY packages ./packages
 COPY apps ./apps
 
-RUN npm install
-
-# Build JavaScript output bypass strict errors
-RUN npx tsc -b --skipLibCheck || true
-RUN npm run build || true
+RUN npm install --legacy-peer-deps
 
 EXPOSE 3001
 
-# Start using tsx directly so no missing dist/ scripts issues
+# Start using tsx directly so no missing dist/ or build errors
 CMD ["npx", "tsx", "apps/web/src/server.ts"]
