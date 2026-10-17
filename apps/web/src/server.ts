@@ -2,7 +2,7 @@ import express, { Request, Response } from 'express';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import * as path from 'node:path';
-import { ToolDatabase } from '@orchestra/mcp-server';
+import { ToolDatabase, createOrchestraServer } from '@orchestra/mcp-server';
 import { OrchestratorDatabase, MissionOrchestrator } from '@orchestra/orchestrator';
 
 import { renderHomePage } from './pages/home.js';
@@ -24,6 +24,67 @@ export interface WebServerOptions {
   toolDb?: ToolDatabase;
   mcpServerUrl?: string;
   dbPath?: string;
+}
+
+let activeEmbeddedMcp: { close: () => Promise<void> } | null = null;
+
+export async function ensureEmbeddedMcpServer(options: {
+  mcpServerUrl?: string;
+  dbPath?: string;
+} = {}): Promise<{ close: () => Promise<void> } | null> {
+  if (activeEmbeddedMcp) return activeEmbeddedMcp;
+
+  const mcpServerUrl = options.mcpServerUrl || process.env.MCP_SERVER_URL || 'http://127.0.0.1:3001/mcp';
+  const dbPath = options.dbPath || process.env.ORCHESTRA_DB_PATH || process.env.DB_PATH || ':memory:';
+
+  const isLocalTarget = mcpServerUrl.includes('127.0.0.1') || mcpServerUrl.includes('localhost');
+  if (!isLocalTarget || process.env.DISABLE_EMBEDDED_MCP === 'true') {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(mcpServerUrl);
+    const mcpPort = Number(parsed.port) || 3001;
+    const endpoint = parsed.pathname || '/mcp';
+
+    const mcpInstance = createOrchestraServer({
+      host: '127.0.0.1',
+      port: mcpPort,
+      endpoint,
+      dbPath
+    });
+
+    activeEmbeddedMcp = await new Promise<{ close: () => Promise<void> } | null>((resolve) => {
+      const srv = mcpInstance.app.listen(mcpPort, '127.0.0.1', () => {
+        console.log(`[ORCHESTRA] Auto-started embedded MCP Server on http://127.0.0.1:${mcpPort}${endpoint}`);
+        resolve({
+          close: async () => {
+            return new Promise<void>((res) => {
+              srv.closeAllConnections();
+              srv.close(() => {
+                try { mcpInstance.db.close(); } catch {}
+                activeEmbeddedMcp = null;
+                res();
+              });
+            });
+          }
+        });
+      });
+
+      srv.on('error', (err: any) => {
+        if (err.code === 'EADDRINUSE') {
+          console.log(`[ORCHESTRA] External MCP server detected on port ${mcpPort}, using standalone process.`);
+        } else {
+          console.warn(`[ORCHESTRA] Embedded MCP server notice: ${err.message}`);
+        }
+        resolve(null);
+      });
+    });
+    return activeEmbeddedMcp;
+  } catch (err: any) {
+    console.warn(`[ORCHESTRA] Could not initialize embedded MCP server: ${err?.message || err}`);
+    return null;
+  }
 }
 
 export function createWebApp(options: WebServerOptions = {}) {
@@ -229,6 +290,9 @@ export function createWebApp(options: WebServerOptions = {}) {
 
     try {
       if (!orchestrator!.mcpClient.isConnected()) {
+        if (mcpServerUrl.includes('127.0.0.1') || mcpServerUrl.includes('localhost')) {
+          await ensureEmbeddedMcpServer({ mcpServerUrl, dbPath });
+        }
         await orchestrator!.mcpClient.connect();
       }
       const discovered = await orchestrator!.mcpClient.listTools();
@@ -825,6 +889,9 @@ export function createWebApp(options: WebServerOptions = {}) {
   app.get('/api/tools', async (_req: Request, res: Response) => {
     try {
       if (!orchestrator!.mcpClient.isConnected()) {
+        if (mcpServerUrl.includes('127.0.0.1') || mcpServerUrl.includes('localhost')) {
+          await ensureEmbeddedMcpServer({ mcpServerUrl, dbPath });
+        }
         await orchestrator!.mcpClient.connect();
       }
       const tools = await orchestrator!.mcpClient.listTools();
@@ -864,6 +931,9 @@ export function createWebApp(options: WebServerOptions = {}) {
       }
 
       if (!orchestrator!.mcpClient.isConnected()) {
+        if (mcpServerUrl.includes('127.0.0.1') || mcpServerUrl.includes('localhost')) {
+          await ensureEmbeddedMcpServer({ mcpServerUrl, dbPath });
+        }
         await orchestrator!.mcpClient.connect();
       }
 
@@ -890,13 +960,33 @@ const isMain = process.argv[1] && (
 if (isMain) {
   const port = Number(process.env.PORT) || 3000;
   const host = process.env.HOST || '0.0.0.0';
-  const { app, orchestratorDb, toolDb } = createWebApp();
+  const mcpServerUrl = process.env.MCP_SERVER_URL || 'http://127.0.0.1:3001/mcp';
+  const dbPath = process.env.ORCHESTRA_DB_PATH || process.env.DB_PATH || ':memory:';
+
+  // Proactively auto-start embedded MCP server if targeting local loopback
+  if (mcpServerUrl.includes('127.0.0.1') || mcpServerUrl.includes('localhost')) {
+    await ensureEmbeddedMcpServer({ mcpServerUrl, dbPath });
+  }
+
+  const { app, orchestrator, orchestratorDb, toolDb } = createWebApp();
+
+  // Proactively establish MCP connection
+  try {
+    await orchestrator.connect();
+    console.log('[ORCHESTRA] Connected to MCP server successfully.');
+  } catch (err: any) {
+    console.warn('[ORCHESTRA] Proactive MCP connection notice:', err.message);
+  }
+
   const server = app.listen(port, host, () => {
     console.log(`[ORCHESTRA WEB] Running at http://${host === '0.0.0.0' ? '127.0.0.1' : host}:${port}`);
   });
 
-  const shutdown = () => {
+  const shutdown = async () => {
     console.log('[ORCHESTRA WEB] Received shutdown signal, closing cleanly...');
+    if (activeEmbeddedMcp) {
+      try { await activeEmbeddedMcp.close(); } catch {}
+    }
     server.close(() => {
       try { orchestratorDb.close(); } catch {}
       try { toolDb.close(); } catch {}
