@@ -728,6 +728,73 @@ describe('ORCHESTRA Phase 5.1 — UI/Backend Integration & Security Audit', () =
     assert.equal(notificationRes.status, 403, 'Notification actions must remain behind mission approval');
   });
 
+  test('UI-AUTH-01: Production login establishes an HttpOnly session for the Tools page and API', async () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    const previousApiKey = process.env.ORCHESTRA_API_KEY;
+    process.env.NODE_ENV = 'production';
+    process.env.ORCHESTRA_API_KEY = 'web-auth-test-key';
+
+    const protectedWeb = createWebApp({ mcpServerUrl: mcpServerUrl, dbPath: ':memory:' });
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+    if (previousApiKey === undefined) delete process.env.ORCHESTRA_API_KEY;
+    else process.env.ORCHESTRA_API_KEY = previousApiKey;
+
+    const protectedServer = protectedWeb.app.listen(0, '127.0.0.1');
+    try {
+      await new Promise<void>((resolve) => protectedServer.once('listening', resolve));
+      const address = protectedServer.address();
+      assert.ok(address && typeof address === 'object');
+      const protectedBaseUrl = `http://127.0.0.1:${address.port}`;
+
+      const redirect = await fetch(`${protectedBaseUrl}/tools`, { redirect: 'manual' });
+      assert.equal(redirect.status, 302);
+      assert.match(redirect.headers.get('location') || '', /^\/login\?returnTo=/);
+
+      const loginPage = await fetch(`${protectedBaseUrl}/login`);
+      assert.equal(loginPage.status, 200);
+      assert.ok((await loginPage.text()).includes('App access key'));
+
+      const rejectedLogin = await fetch(`${protectedBaseUrl}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ apiKey: 'wrong-key', returnTo: '/tools' }),
+        redirect: 'manual'
+      });
+      assert.equal(rejectedLogin.status, 401);
+
+      const login = await fetch(`${protectedBaseUrl}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ apiKey: 'web-auth-test-key', returnTo: '/tools' }),
+        redirect: 'manual'
+      });
+      assert.equal(login.status, 302);
+      assert.equal(login.headers.get('location'), '/tools');
+      const cookie = login.headers.get('set-cookie')?.split(';')[0];
+      assert.ok(cookie?.startsWith('orchestra_key='));
+
+      const toolsPage = await fetch(`${protectedBaseUrl}/tools`, {
+        headers: { Cookie: cookie! }
+      });
+      assert.equal(toolsPage.status, 200);
+      assert.ok((await toolsPage.text()).includes('calendar_read_events'));
+
+      const toolsApi = await fetch(`${protectedBaseUrl}/api/tools`, {
+        headers: { Cookie: cookie! }
+      });
+      assert.equal(toolsApi.status, 200);
+      const catalog = await toolsApi.json() as { tools: unknown[] };
+      assert.equal(catalog.tools.length, 16);
+    } finally {
+      protectedServer.closeAllConnections();
+      await new Promise<void>((resolve, reject) => protectedServer.close((error) => error ? reject(error) : resolve()));
+      await protectedWeb.orchestrator.mcpClient.close();
+      protectedWeb.orchestratorDb.close();
+      protectedWeb.toolDb.close();
+    }
+  });
+
   // =========================================================================
   // 17. HOME SCREEN INTERACTIVE COMPONENTS & ATTACHMENT WIRING
   // =========================================================================

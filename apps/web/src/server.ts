@@ -151,6 +151,92 @@ export function createWebApp(options: WebServerOptions = {}) {
     return (match && match[1]) ? decodeURIComponent(match[1].trim()) : null;
   }
 
+  function safeReturnTo(value: unknown): string {
+    return typeof value === 'string' && value.startsWith('/') && !value.startsWith('//')
+      ? value
+      : '/';
+  }
+
+  function renderLoginPage(returnTo: string, hasError: boolean = false): string {
+    const escapedReturnTo = returnTo
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;');
+    return `<!doctype html>
+      <html lang="en">
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>Sign in · Alexa+</title>
+          <style>
+            * { box-sizing: border-box; }
+            body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; background: #f8fafc; color: #0f172a; font-family: Inter, system-ui, sans-serif; }
+            main { width: min(100%, 420px); padding: 32px; border: 1px solid #e2e8f0; border-radius: 20px; background: white; box-shadow: 0 16px 48px #0f172a12; }
+            h1 { margin: 0 0 8px; font-size: 24px; } p { color: #64748b; font-size: 14px; line-height: 1.5; }
+            label { display: block; margin: 24px 0 8px; font-size: 13px; font-weight: 700; }
+            input { width: 100%; padding: 12px; border: 1px solid #cbd5e1; border-radius: 10px; font: inherit; }
+            button { width: 100%; margin-top: 16px; padding: 12px; border: 0; border-radius: 10px; background: #2563eb; color: white; font: inherit; font-weight: 700; cursor: pointer; }
+            .error { color: #b91c1c; } .hint { font-size: 12px; }
+          </style>
+        </head>
+        <body>
+          <main>
+            <h1>Sign in to Alexa+</h1>
+            <p>Enter the app access key configured as <code>ORCHESTRA_API_KEY</code> in your deployment settings.</p>
+            ${hasError ? '<p class="error" role="alert">That access key was not accepted. Please try again.</p>' : ''}
+            <form method="post" action="/auth/login">
+              <input type="hidden" name="returnTo" value="${escapedReturnTo}">
+              <label for="apiKey">App access key</label>
+              <input id="apiKey" name="apiKey" type="password" autocomplete="current-password" required autofocus>
+              <button type="submit">Sign in</button>
+            </form>
+            <p class="hint">The key is stored in your deployment environment and is not sent to any external service.</p>
+          </main>
+        </body>
+      </html>`;
+  }
+
+  app.get('/login', (req: Request, res: Response) => {
+    if (!apiKey) {
+      res.redirect('/');
+      return;
+    }
+    res.type('html').send(renderLoginPage(safeReturnTo(req.query.returnTo)));
+  });
+
+  app.post('/auth/login', (req: Request, res: Response) => {
+    if (!apiKey) {
+      res.redirect('/');
+      return;
+    }
+
+    const returnTo = safeReturnTo(req.body.returnTo);
+    const providedKey = typeof req.body.apiKey === 'string' ? req.body.apiKey : '';
+    if (!safeCompare(providedKey, apiKey)) {
+      res.status(401).type('html').send(renderLoginPage(returnTo, true));
+      return;
+    }
+
+    res.cookie('orchestra_key', providedKey, {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: 'strict',
+      path: '/',
+      maxAge: 7 * 24 * 60 * 60 * 1000
+    });
+    res.redirect(returnTo);
+  });
+
+  app.post('/auth/logout', (_req: Request, res: Response) => {
+    res.clearCookie('orchestra_key', {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: 'strict',
+      path: '/'
+    });
+    res.redirect('/login');
+  });
+
   if (apiKey) {
     app.use('/api', (req: Request, res: Response, next) => {
       // Allow unauthenticated health check
@@ -189,6 +275,32 @@ export function createWebApp(options: WebServerOptions = {}) {
         });
       }
       next();
+    });
+
+    app.use((req: Request, res: Response, next) => {
+      if (
+        req.path === '/login' ||
+        req.path === '/auth/login' ||
+        req.path === '/auth/logout' ||
+        req.path.startsWith('/static') ||
+        req.path === '/favicon.ico' ||
+        req.path.startsWith('/api/')
+      ) {
+        next();
+        return;
+      }
+
+      const cookieKey = extractKeyFromCookie(req.headers.cookie);
+      if (cookieKey && safeCompare(cookieKey, apiKey)) {
+        next();
+        return;
+      }
+
+      if (req.accepts('html')) {
+        res.redirect(`/login?returnTo=${encodeURIComponent(req.originalUrl)}`);
+        return;
+      }
+      res.status(401).json({ error: 'Authentication required', code: 'AUTH_REQUIRED' });
     });
   }
 

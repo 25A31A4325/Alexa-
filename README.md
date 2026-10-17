@@ -130,7 +130,7 @@ Calendar events, reminders, notifications, analytics, and connector status use p
 
 1. In Render, create a new Blueprint from this repository and apply `render.yaml`.
 2. Set the prompted `ORCHESTRA_API_KEY` secret in Render. The app refuses to start in production without it.
-3. Deploy and open the generated `onrender.com` URL. Render checks `/api/health`; SQLite data is stored on the mounted `/data` disk.
+3. Deploy and open the generated `onrender.com` URL. Sign in using the configured API key; the app keeps it in a secure, HTTP-only browser cookie. Render checks `/api/health`.
 
 The Blueprint uses Render's free web-service plan. The filesystem is ephemeral and the service may sleep; local database contents can be lost after restarts or redeploys. Choose a paid Render plan with a persistent disk and set `DB_PATH` to `/data/orchestra.db` if you need durable data.
 
