@@ -94,7 +94,7 @@ The sidebar footer permanently displays user credentials matching the visual ref
 
 ### 3.9 Settings & System Configuration (`/settings`)
 - Builder Profile: Shanmukheswar | Pro Builder (Alexa+ Track).
-- MCP Runtime details: Protocol version `2025-11-25`, transport `Streamable HTTP`, endpoint `http://127.0.0.1:3001/mcp`.
+- MCP Runtime details: Protocol version `2025-11-25`, transport `Streamable HTTP`, endpoint `http://http://127.0.0.1:3001/mcp`.
 - Security Guardrails: SHA-256 canonical parameter fingerprinting policy, 300s TTL, 15000ms worker leases.
 
 ---

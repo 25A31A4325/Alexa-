@@ -22,7 +22,7 @@ This implementation plan defines small, verifiable, sequential stages. Advancing
   * `packages/mcp-server/src/server.ts`
   * `packages/mcp-server/src/tools/*.ts` (all 11 domain tools)
   * `packages/mcp-server/src/demo-data.ts` (explicitly labeled demonstration documents and records)
-* **Expected Behavior:** Server starts on `127.0.0.1:3001`, mounts `/mcp` using `StreamableHTTPServerTransport`, defends Host header, and registers all 11 tools.
+* **Expected Behavior:** Server starts on `http://127.0.0.1:3001`, mounts `/mcp` using `StreamableHTTPServerTransport`, defends Host header, and registers all 11 tools.
 * **Acceptance Criteria:** Responds to JSON-RPC 2.0 initialize request; returns tools via `tools/list`.
 * **Automated Tests:** `packages/mcp-server/test/server.test.ts` testing server initialization and tool registry.
 * **Rollback:** Terminate port 3001 process.

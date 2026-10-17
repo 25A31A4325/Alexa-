@@ -321,7 +321,7 @@ export function renderLayout({ title = 'ORCHESTRA — Alexa+ Mission Platform', 
       <img src="/static/amazon-wordmark-logo.png" alt="Amazon Wordmark" class="hidden" />
       
       <!-- Live MCP Telemetry Badge with animated radar indicator -->
-      <button onclick="window.showToast('MCP Server active: 11 tools registered, streamable SSE online at http://127.0.0.1:3001/mcp', 'info', '⚡')" 
+      <button onclick="window.showToast('MCP Server active: 11 tools registered, streamable SSE online at http://http://127.0.0.1:3001/mcp', 'info', '⚡')" 
               class="hidden lg:flex items-center gap-2 text-[11px] font-semibold ${isLightContent ? 'text-emerald-700 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100/70' : 'text-emerald-300 bg-emerald-950/80 border border-emerald-500/40 hover:bg-emerald-900/60'} px-3 py-1 rounded-full transition cursor-pointer shadow-xs"
               title="Click for MCP Server telemetry">
         <span class="relative flex h-2 w-2">

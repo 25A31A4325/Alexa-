@@ -48,7 +48,7 @@ ENV HOST=0.0.0.0
 ENV MCP_SERVER_HOST=0.0.0.0
 ENV MCP_SERVER_PORT=3001
 ENV MCP_SERVER_ENDPOINT=/mcp
-ENV MCP_SERVER_URL=http://127.0.0.1:3001/mcp
+ENV MCP_SERVER_URL=http://http://127.0.0.1:3001/mcp
 ENV DB_PATH=/data/orchestra.db
 
 # Create persistent data directory and assign permissions to non-root node user

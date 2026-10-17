@@ -94,6 +94,6 @@ If zero rows are updated by step 3, another concurrent thread already resolved t
 |---|---|---|
 | **Frontend Approval Bypass** | Critical | The MCP tool runner validates approval state directly against the database table `approvals` within the execution transaction. Direct API calls to execute consequential tools without a valid approved record return `403 Forbidden`. |
 | **Parameter Tampering via REST API** | Critical | The client must pass `action_fingerprint` in `POST /api/approvals/:id/resolve`. The backend recomputes the SHA-256 hash from stored canonical parameters; any discrepancy triggers an immediate security alert. |
-| **DNS Rebinding on Local MCP Port** | High | The self-hosted Express MCP server verifies `req.headers.host === 'localhost:3001'` or `127.0.0.1:3001`. Unrecognized host headers return `403 Forbidden`. |
+| **DNS Rebinding on Local MCP Port** | High | The self-hosted Express MCP server verifies `req.headers.host === 'localhost:3001'` or `http://127.0.0.1:3001`. Unrecognized host headers return `403 Forbidden`. |
 | **Prompt Injection into Tool Arguments** | High | All tool inputs are strictly parsed against Zod schemas before handler execution. Unknown fields are stripped; type violations return JSON-RPC `-32602`. |
 | **Credential / Secret Leakage in UI Streams** | High | The SSE event pipeline and activity logger run an egress filter that redacts API keys, bearer tokens, and credentials. |

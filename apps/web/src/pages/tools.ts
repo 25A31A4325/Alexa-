@@ -262,7 +262,7 @@ export function renderToolsPage(options: ToolsPageOptions = {}): string {
         <div class="text-3xl">⚠️</div>
         <h3 class="text-base font-bold text-rose-800">MCP Server Offline / Tools Unavailable</h3>
         <p class="text-xs text-slate-600 max-w-xl mx-auto leading-relaxed">
-          Could not dynamically discover tools from the MCP server at <code class="bg-slate-100 px-1.5 py-0.5 rounded text-rose-800 font-mono">http://127.0.0.1:3001/mcp</code>.
+          Could not dynamically discover tools from the MCP server at <code class="bg-slate-100 px-1.5 py-0.5 rounded text-rose-800 font-mono">http://http://127.0.0.1:3001/mcp</code>.
           ${errorMessage ? `<br><span class="text-rose-600 font-mono mt-1 block">Error: ${errorMessage}</span>` : ''}
         </p>
         <p class="text-xs font-bold text-slate-700">0 Tools Available</p>
@@ -639,7 +639,7 @@ export function renderToolsPage(options: ToolsPageOptions = {}): string {
           <div class="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-200">
             <div>
               <span class="text-xs font-bold text-slate-800 block">MCP Server Endpoint</span>
-              <span class="text-[11px] font-mono text-slate-500">http://127.0.0.1:3001/mcp</span>
+              <span class="text-[11px] font-mono text-slate-500">http://http://127.0.0.1:3001/mcp</span>
             </div>
             <span class="text-[10px] font-bold px-2 py-0.5 rounded-full ${serverOnline ? 'bg-emerald-100 text-emerald-700 border border-emerald-200' : 'bg-rose-100 text-rose-700 border border-rose-200'}">
               ${serverOnline ? '● CONNECTED' : '○ OFFLINE'}

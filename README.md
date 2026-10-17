@@ -100,11 +100,11 @@ npm test
 ```
 
 ### Starting the Applications Locally
-1. Start the MCP Server (`http://127.0.0.1:3001/mcp`):
+1. Start the MCP Server (`http://http://127.0.0.1:3001/mcp`):
 ```bash
 npm run start:mcp-server
 ```
-Health check endpoint: `http://127.0.0.1:3001/health`
+Health check endpoint: `http://http://127.0.0.1:3001/health`
 
 2. Start the Mission Control Web UI (`http://127.0.0.1:3000`):
 ```bash

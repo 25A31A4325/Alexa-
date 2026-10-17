@@ -8,7 +8,7 @@ ORCHESTRA strictly implements the official Model Context Protocol (MCP) using th
 * **Wire Protocol:** JSON-RPC 2.0 over HTTP.
 * **Server Transport:** `StreamableHTTPServerTransport` from `@modelcontextprotocol/sdk/server/streamableHttp.js`.
 * **Client Transport:** `StreamableHTTPClientTransport` from `@modelcontextprotocol/sdk/client/streamableHttp.js`.
-* **Network Address:** `http://127.0.0.1:3001/mcp` (configurable via `MCP_SERVER_URL`).
+* **Network Address:** `http://http://127.0.0.1:3001/mcp` (configurable via `MCP_SERVER_URL`).
 
 ---
 
@@ -16,7 +16,7 @@ ORCHESTRA strictly implements the official Model Context Protocol (MCP) using th
 
 ### 2.1. Server Lifecycle States
 1. **Boot:** Server initializes Express instance and mounts `/mcp`. Registers all 11 domain tools with typed Zod schemas.
-2. **Listen:** Binds to `127.0.0.1:3001`. Validates incoming `Host` headers to prevent DNS rebinding.
+2. **Listen:** Binds to `http://127.0.0.1:3001`. Validates incoming `Host` headers to prevent DNS rebinding.
 3. **Session Handshake (`initialize`):** Receives JSON-RPC `initialize` request from client. Negotiates protocol version `2024-11-05` and returns server capabilities:
    ```json
    {
@@ -47,7 +47,7 @@ export function createMcpHttpServer() {
   // DNS Rebinding Guard
   app.use((req, res, next) => {
     const host = req.headers.host;
-    if (host && (host.startsWith('localhost:3001') || host.startsWith('127.0.0.1:3001'))) {
+    if (host && (host.startsWith('localhost:3001') || host.startsWith('http://127.0.0.1:3001'))) {
       return next();
     }
     return res.status(403).json({ error: "Forbidden: invalid host header" });
@@ -77,7 +77,7 @@ export function createMcpHttpServer() {
 ## 3. Client Architecture & Lifecycle
 
 ### 3.1. Client Lifecycle States
-1. **Instantiation:** Instantiates official `Client` and `StreamableHTTPClientTransport(new URL("http://127.0.0.1:3001/mcp"))`.
+1. **Instantiation:** Instantiates official `Client` and `StreamableHTTPClientTransport(new URL("http://http://127.0.0.1:3001/mcp"))`.
 2. **Connection Handshake:** Dispatches `initialize` and `notifications/initialized`.
 3. **Dynamic Tool Discovery:** Calls `client.listTools()`. Discovered schemas are mapped to the LLM's function-calling tool format.
 4. **Tool Invocation:** Calls `client.callTool({ name, arguments })` over HTTP.
@@ -103,7 +103,7 @@ We mandate an automated integration test (`test/mcp-conformance.test.ts`) that e
 
 ```
 [Actual Test Runner] 
-         | (1) Spawns real McpServer on 127.0.0.1:3001
+         | (1) Spawns real McpServer on http://127.0.0.1:3001
          v
 [StreamableHTTPServerTransport]
          ^

@@ -41,7 +41,7 @@ function isSelfHostedMcp(urlStr?: string): boolean {
 }
 
 function normalizeMcpUrl(urlStr?: string): string {
-  if (!urlStr) return 'http://127.0.0.1:3001/mcp';
+  if (!urlStr) return 'http://http://127.0.0.1:3001/mcp';
   let cleaned = urlStr.trim().replace(/\/+$/, '');
   if (!cleaned.endsWith('/mcp')) {
     cleaned = `${cleaned}/mcp`;
@@ -55,7 +55,7 @@ export async function ensureEmbeddedMcpServer(options: {
 } = {}): Promise<{ close: () => Promise<void> } | null> {
   if (activeEmbeddedMcp) return activeEmbeddedMcp;
 
-  const rawUrl = options.mcpServerUrl || process.env.MCP_SERVER_URL || 'http://127.0.0.1:3001/mcp';
+  const rawUrl = options.mcpServerUrl || process.env.MCP_SERVER_URL || 'http://http://127.0.0.1:3001/mcp';
   const dbPath = options.dbPath || process.env.ORCHESTRA_DB_PATH || process.env.DB_PATH || ':memory:';
 
   if (!isSelfHostedMcp(rawUrl) || process.env.DISABLE_EMBEDDED_MCP === 'true') {
@@ -112,8 +112,8 @@ export function createWebApp(options: WebServerOptions = {}) {
   const toolDb = options.toolDb || new ToolDatabase(dbPath);
   toolDb.seedDemoKnowledge();
 
-  const rawMcpUrl = normalizeMcpUrl(options.mcpServerUrl || process.env.MCP_SERVER_URL || 'http://127.0.0.1:3001/mcp');
-  const mcpServerUrl = isSelfHostedMcp(rawMcpUrl) ? 'http://127.0.0.1:3001/mcp' : rawMcpUrl;
+  const rawMcpUrl = normalizeMcpUrl(options.mcpServerUrl || process.env.MCP_SERVER_URL || 'http://http://127.0.0.1:3001/mcp');
+  const mcpServerUrl = isSelfHostedMcp(rawMcpUrl) ? 'http://http://127.0.0.1:3001/mcp' : rawMcpUrl;
 
   let orchestrator = options.orchestrator;
   if (!orchestrator) {
@@ -997,7 +997,7 @@ const isMain = process.argv[1] && (
 if (isMain) {
   const port = Number(process.env.PORT) || 3000;
   const host = process.env.HOST || '0.0.0.0';
-  const mcpServerUrl = process.env.MCP_SERVER_URL || 'http://127.0.0.1:3001/mcp';
+  const mcpServerUrl = process.env.MCP_SERVER_URL || 'http://http://127.0.0.1:3001/mcp';
   const dbPath = process.env.ORCHESTRA_DB_PATH || process.env.DB_PATH || ':memory:';
 
   // Proactively auto-start embedded MCP server if targeting self-hosted/loopback

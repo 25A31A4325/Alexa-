@@ -191,7 +191,7 @@ describe('ORCHESTRA Phase 5.1 — UI/Backend Integration & Security Audit', () =
     const html = renderToolsPage({
       tools: [],
       serverOnline: false,
-      errorMessage: 'ECONNREFUSED 127.0.0.1:3001'
+      errorMessage: 'ECONNREFUSED http://127.0.0.1:3001'
     });
 
     assert.ok(html.includes('MCP Server Offline / Tools Unavailable'));
