@@ -225,12 +225,28 @@ export function createWebApp(options: WebServerOptions = {}) {
   };
 
   // --- Health Check ---
-  app.get('/api/health', (_req: Request, res: Response) => {
+  app.get('/api/health', async (_req: Request, res: Response) => {
+    let mcpStatus = 'offline';
+    try {
+      if (!orchestrator.mcpClient.isConnected()) {
+        if (mcpServerUrl.includes('127.0.0.1') || mcpServerUrl.includes('localhost')) {
+          await ensureEmbeddedMcpServer({ mcpServerUrl, dbPath });
+        }
+        await orchestrator.mcpClient.connect();
+      }
+      mcpStatus = orchestrator.mcpClient.isConnected() ? 'connected' : 'disconnected';
+    } catch (e: any) {
+      mcpStatus = `error: ${e?.message || e}`;
+    }
+
     res.json({
       status: 'ok',
       service: 'orchestra-web',
       time: new Date().toISOString(),
-      mcpProtocol: '2025-11-25'
+      mcpProtocol: '2025-11-25',
+      mcpStatus,
+      mcpServerUrl,
+      embeddedMcpActive: activeEmbeddedMcp !== null
     });
   });
 

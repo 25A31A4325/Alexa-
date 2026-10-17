@@ -43,7 +43,7 @@ export class OrchestraMcpClient {
       return;
     }
     const url = new URL(this.serverUrl);
-    this.transport = new StreamableHTTPClientTransport(url, {
+    const transport = new StreamableHTTPClientTransport(url, {
       requestInit: {
         headers: {
           'Accept': 'text/event-stream, application/json',
@@ -51,50 +51,73 @@ export class OrchestraMcpClient {
         }
       }
     });
-    await this.client.connect(this.transport);
+    try {
+      await this.client.connect(transport);
+      this.transport = transport;
+    } catch (err) {
+      this.transport = null;
+      try {
+        await transport.close();
+      } catch {}
+      throw err;
+    }
   }
 
   public async listTools(): Promise<DiscoveredTool[]> {
     if (!this.transport) {
       throw new Error('McpClient is not connected. Call connect() first.');
     }
-    const res = await this.client.listTools();
-    return (res.tools || []).map((t) => ({
-      name: t.name,
-      description: t.description,
-      inputSchema: t.inputSchema as Record<string, unknown>
-    }));
+    try {
+      const res = await this.client.listTools();
+      return (res.tools || []).map((t) => ({
+        name: t.name,
+        description: t.description,
+        inputSchema: t.inputSchema as Record<string, unknown>
+      }));
+    } catch (err: any) {
+      if (err?.message?.includes('Not connected') || err?.message?.includes('closed')) {
+        this.transport = null;
+      }
+      throw err;
+    }
   }
 
   public async callTool(name: string, args: Record<string, unknown> = {}): Promise<unknown> {
     if (!this.transport) {
       throw new Error('McpClient is not connected. Call connect() first.');
     }
-    const rawRes = await this.client.callTool({
-      name,
-      arguments: args
-    });
+    try {
+      const rawRes = await this.client.callTool({
+        name,
+        arguments: args
+      });
 
-    const res = rawRes as McpToolCallResponse;
+      const res = rawRes as McpToolCallResponse;
 
-    if (res.isError) {
-      const errText = res.content
-        ?.map((c) => (c.type === 'text' && c.text ? c.text : ''))
-        .join(' ') || 'Unknown MCP tool error';
-      throw new Error(`Tool execution error: ${errText}`);
-    }
+      if (res.isError) {
+        const errText = res.content
+          ?.map((c) => (c.type === 'text' && c.text ? c.text : ''))
+          .join(' ') || 'Unknown MCP tool error';
+        throw new Error(`Tool execution error: ${errText}`);
+      }
 
-    if (res.content && res.content.length > 0) {
-      const first = res.content[0];
-      if (first && first.type === 'text' && typeof first.text === 'string') {
-        try {
-          return JSON.parse(first.text);
-        } catch {
-          return first.text;
+      if (res.content && res.content.length > 0) {
+        const first = res.content[0];
+        if (first && first.type === 'text' && typeof first.text === 'string') {
+          try {
+            return JSON.parse(first.text);
+          } catch {
+            return first.text;
+          }
         }
       }
+      return res;
+    } catch (err: any) {
+      if (err?.message?.includes('Not connected') || err?.message?.includes('closed')) {
+        this.transport = null;
+      }
+      throw err;
     }
-    return res;
   }
 
   public isConnected(): boolean {
