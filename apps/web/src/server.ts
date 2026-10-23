@@ -1151,6 +1151,9 @@ export function createWebApp(options: WebServerOptions = {}) {
   // 2. Mission State Inspector
   app.get('/api/missions/:id/state', (req: Request, res: Response) => {
     const missionId = String(req.params.id);
+    if (missionId === 'demo-meeting-prep') {
+      ensureDemoMeetingPrep(orchestrator!.db);
+    }
     const mission = orchestrator!.db.getMission(missionId);
     if (!mission || !canAccessMission(missionId, optionalSessionId(req, res))) {
       return res.status(404).json({ error: 'Mission not found' });
@@ -1283,6 +1286,9 @@ export function createWebApp(options: WebServerOptions = {}) {
   // 5. Server-Sent Events (SSE) Stream
   app.get('/api/missions/:id/events', (req: Request, res: Response): void => {
     const missionId = String(req.params.id);
+    if (missionId === 'demo-meeting-prep') {
+      ensureDemoMeetingPrep(orchestrator!.db);
+    }
     const mission = orchestrator!.db.getMission(missionId);
     if (!mission || !canAccessMission(missionId, optionalSessionId(req, res))) {
       res.status(404).json({ error: 'Mission not found' });
