@@ -2,6 +2,7 @@
   "name": "orchestra",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "ORCHESTRA — Agentic Mission-Execution Platform for Alexa+ Hackathon 2026",
   "workspaces": [
     "packages/*",
