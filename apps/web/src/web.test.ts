@@ -319,9 +319,12 @@ describe('ORCHESTRA Phase 5.1 — UI/Backend Integration & Security Audit', () =
     assert.ok(html.includes('Gmail'));
     assert.ok(html.includes('Google Drive'));
     assert.ok(html.includes('GitHub'));
+    assert.ok(html.includes('Slack'));
+    assert.ok(html.includes('Notion'));
+    assert.ok(html.includes('Figma'));
+    assert.ok(html.includes('Google Maps'));
+    assert.ok(html.includes('Microsoft Outlook'));
     assert.ok(html.includes('gmail.readonly'));
-    assert.ok(html.includes('Loading status'));
-    assert.ok(!html.includes('Slack'));
     assert.ok(!html.includes('LOCAL DEMO'));
   });
 
