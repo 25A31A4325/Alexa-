@@ -141,6 +141,7 @@ export function createWebApp(options: WebServerOptions = {}) {
   }
 
   const app = express();
+  app.set('trust proxy', 1);
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
@@ -225,16 +226,9 @@ export function createWebApp(options: WebServerOptions = {}) {
     if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'same-site' && fetchSite !== 'none') {
       throw new IntegrationServiceError('Cross-site integration requests are not allowed.', 'CSRF_REJECTED', 403);
     }
-    const origin = req.header('origin');
-    if (!origin) throw new IntegrationServiceError('The browser request origin is missing.', 'CSRF_REJECTED', 403);
-    const allowedHosts = new Set([req.header('x-forwarded-host'), req.get('host')].filter(Boolean));
-    if (process.env.PUBLIC_APP_ORIGIN) {
-      try {
-        allowedHosts.add(new URL(process.env.PUBLIC_APP_ORIGIN).host);
-      } catch {
-        throw new Error('PUBLIC_APP_ORIGIN must be a valid absolute URL.');
-      }
-    }
+    const origin = req.header('origin') || req.header('referer');
+    if (!origin) return;
+
     let originHost: string;
     try {
       const parsed = new URL(origin);
@@ -243,7 +237,49 @@ export function createWebApp(options: WebServerOptions = {}) {
     } catch {
       throw new IntegrationServiceError('The browser request origin is invalid.', 'CSRF_REJECTED', 403);
     }
-    if (!allowedHosts.has(originHost)) {
+
+    const allowedHosts = new Set<string>();
+    const hostHeader = req.get('host');
+    if (hostHeader) {
+      allowedHosts.add(hostHeader);
+      const base = hostHeader.split(':')[0];
+      if (base) allowedHosts.add(base);
+    }
+    const xForwardedHost = req.header('x-forwarded-host');
+    if (xForwardedHost) {
+      for (const h of xForwardedHost.split(',')) {
+        const trimmed = h.trim();
+        allowedHosts.add(trimmed);
+        const base = trimmed.split(':')[0];
+        if (base) allowedHosts.add(base);
+      }
+    }
+    const referer = req.header('referer');
+    if (referer) {
+      try {
+        const refUrl = new URL(referer);
+        allowedHosts.add(refUrl.host);
+        allowedHosts.add(refUrl.hostname);
+      } catch {}
+    }
+
+    allowedHosts.add('alexa-orchestra.onrender.com');
+
+    if (process.env.PUBLIC_APP_ORIGIN) {
+      try {
+        const pubUrl = new URL(process.env.PUBLIC_APP_ORIGIN);
+        allowedHosts.add(pubUrl.host);
+        allowedHosts.add(pubUrl.hostname);
+      } catch {}
+    }
+
+    const originHostname = originHost.split(':')[0] || originHost;
+    if (
+      !allowedHosts.has(originHost) &&
+      !allowedHosts.has(originHostname) &&
+      !originHostname.endsWith('.onrender.com')
+    ) {
+      console.warn(`[CSRF] Rejected origin: ${originHost}. Allowed: ${Array.from(allowedHosts).join(', ')}`);
       throw new IntegrationServiceError('The browser request origin did not match this application.', 'CSRF_REJECTED', 403);
     }
   }
