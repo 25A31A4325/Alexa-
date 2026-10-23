@@ -320,18 +320,15 @@ export function renderLoginPage(opts: AuthPageOptions = {}): string {
 
       <div class="divider">or</div>
 
-      ${googleConfigured ? `
-        <a href="/auth/google?returnTo=${encodeURIComponent(returnTo)}" class="btn-google">
-          ${GOOGLE_SVG}
-          <span>Continue with Google</span>
-        </a>
-      ` : `
-        <button type="button" class="btn-google" style="opacity: 0.6; cursor: not-allowed;" title="Configure GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_AUTH_REDIRECT_URI in the server environment">
-          ${GOOGLE_SVG}
-          <span>Continue with Google</span>
-        </button>
-        <p class="password-hint">To enable Google sign-in, configure GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_AUTH_REDIRECT_URI on the server, then add the callback URL in Google Cloud Console.</p>
-      `}
+      <a href="/auth/google?returnTo=${encodeURIComponent(returnTo)}" class="btn-google">
+        ${GOOGLE_SVG}
+        <span>Continue with Google</span>
+      </a>
+      ${!googleConfigured ? `
+        <p class="password-hint" style="text-align: center; margin-top: 8px; font-size: 11px;">
+          To activate Google sign-in, configure GOOGLE_CLIENT_ID &amp; GOOGLE_CLIENT_SECRET in your deployment settings.
+        </p>
+      ` : ''}
 
       <div class="card-footer">
         Don't have an account? <a href="/register?returnTo=${escapedReturnTo}" class="link" style="font-weight: 600;">Create account</a>
@@ -413,18 +410,15 @@ export function renderRegisterPage(opts: AuthPageOptions = {}): string {
 
       <div class="divider">or</div>
 
-      ${googleConfigured ? `
-        <a href="/auth/google?returnTo=${encodeURIComponent(returnTo)}" class="btn-google">
-          ${GOOGLE_SVG}
-          <span>Continue with Google</span>
-        </a>
-      ` : `
-        <button type="button" class="btn-google" style="opacity: 0.6; cursor: not-allowed;" title="Configure GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_AUTH_REDIRECT_URI in the server environment">
-          ${GOOGLE_SVG}
-          <span>Continue with Google</span>
-        </button>
-        <p class="password-hint">To enable Google sign-in, configure GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_AUTH_REDIRECT_URI on the server, then add the callback URL in Google Cloud Console.</p>
-      `}
+      <a href="/auth/google?returnTo=${encodeURIComponent(returnTo)}" class="btn-google">
+        ${GOOGLE_SVG}
+        <span>Continue with Google</span>
+      </a>
+      ${!googleConfigured ? `
+        <p class="password-hint" style="text-align: center; margin-top: 8px; font-size: 11px;">
+          To activate Google sign-in, configure GOOGLE_CLIENT_ID &amp; GOOGLE_CLIENT_SECRET in your deployment settings.
+        </p>
+      ` : ''}
 
       <div class="card-footer">
         Already have an account? <a href="/login?returnTo=${escapedReturnTo}" class="link" style="font-weight: 600;">Sign in</a>
