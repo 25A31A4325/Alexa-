@@ -18,9 +18,8 @@ const INTEGRATION_SERVICES: IntegrationServiceItem[] = [
     name: 'Google Calendar',
     category: 'Productivity',
     description: 'Check your schedule, find meetings, and manage events.',
-    initialStatus: 'connected',
+    initialStatus: 'not_connected',
     provider: 'google',
-    account: 'alexa.orchestra.agent@gmail.com',
     features: [
       { id: 'google-calendar-read', label: 'Read events and availability', scope: 'calendar.events.readonly', checked: true },
       { id: 'google-calendar-write', label: 'Create and update events', scope: 'calendar.events', checked: true }
@@ -39,9 +38,8 @@ const INTEGRATION_SERVICES: IntegrationServiceItem[] = [
     name: 'Google Drive',
     category: 'Knowledge',
     description: 'Find, analyze, and work with your documents and files.',
-    initialStatus: 'connected',
+    initialStatus: 'not_connected',
     provider: 'google',
-    account: 'alexa.orchestra.agent@gmail.com',
     features: [
       { id: 'google-drive-search', label: 'Search file names and metadata', scope: 'drive.metadata.readonly', checked: true },
       { id: 'google-drive-content', label: 'Read supported document contents', scope: 'drive.readonly', checked: true }
@@ -60,9 +58,8 @@ const INTEGRATION_SERVICES: IntegrationServiceItem[] = [
     name: 'Gmail',
     category: 'Communication',
     description: 'Search, read, and draft emails.',
-    initialStatus: 'connected',
+    initialStatus: 'not_connected',
     provider: 'google',
-    account: 'alexa.orchestra.agent@gmail.com',
     features: [
       { id: 'gmail-read', label: 'Search and read messages', scope: 'gmail.readonly', checked: true },
       { id: 'gmail-send', label: 'Send email (approval required)', scope: 'gmail.send', checked: false }
@@ -80,8 +77,7 @@ const INTEGRATION_SERVICES: IntegrationServiceItem[] = [
     name: 'Notion',
     category: 'Knowledge',
     description: 'Access your notes, documents, and knowledge base.',
-    initialStatus: 'connected',
-    account: 'Workspace: ORCHESTRA Docs',
+    initialStatus: 'not_connected',
     iconSvg: `<svg class="w-9 h-9 shrink-0" viewBox="0 0 100 100" fill="none">
       <rect width="100" height="100" rx="22" fill="#000000"/>
       <path d="M28 26h14.5l22 33V26H78v48H63.5l-22-33v33H28V26z" fill="#FFFFFF"/>
@@ -276,14 +272,14 @@ export function renderIntegrationsPage(): string {
             data-filter="connected"
             class="filter-pill rounded-lg bg-slate-100 px-4 py-1.5 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-200"
           >
-            Connected (4)
+            Connected (0)
           </button>
           <button
             type="button"
             data-filter="available"
             class="filter-pill rounded-lg bg-slate-100 px-4 py-1.5 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-200"
           >
-            Available (12)
+            Available (9)
           </button>
           <button
             type="button"
@@ -608,6 +604,8 @@ export function renderIntegrationsPage(): string {
           const availableCount = document.querySelectorAll('.integration-card[data-status="not_connected"]').length;
           const connectedPill = document.querySelector('[data-filter="connected"]');
           if (connectedPill) connectedPill.textContent = \`Connected (\${connectedCount})\`;
+          const availablePill = document.querySelector('[data-filter="available"]');
+          if (availablePill) availablePill.textContent = \`Available (\${availableCount})\`;
         }
 
         function bindActionButtons() {
