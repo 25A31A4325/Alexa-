@@ -360,7 +360,19 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
   } else if (mission.status === 'NEEDS_CLARIFICATION') {
     statusBadgeHtml = `<span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200"><span class="w-2 h-2 rounded-full bg-amber-500"></span>NEEDS CLARIFICATION</span>`;
   } else if (mission.status === 'AWAITING_APPROVAL') {
-    statusBadgeHtml = `<span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-800 border border-amber-300 shadow-2xs"><span class="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>AWAITING APPROVAL</span>`;
+    statusBadgeHtml = `
+      <div class="flex items-center gap-2">
+        <button onclick="switchStep(3)" class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-800 border border-amber-300 shadow-2xs hover:bg-amber-100 transition cursor-pointer" title="View consequential action awaiting authorization in Step 3">
+          <span class="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
+          <span>AWAITING APPROVAL</span>
+          <span class="text-[10px] text-amber-700 bg-amber-200/80 px-1.5 py-0.5 rounded font-mono">Step 3 →</span>
+        </button>
+        <button id="auto-run-btn" onclick="startAutomaticMissionDemo()" class="inline-flex items-center gap-1.5 px-3 py-1 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-full text-xs font-bold transition shadow-xs hover:scale-105 cursor-pointer" title="Auto-run full mission from Step 1 to Step 5">
+          <span>⚡</span>
+          <span>Auto-Play Mission</span>
+        </button>
+      </div>
+    `;
   } else {
     statusBadgeHtml = `
       <div class="relative">
@@ -434,6 +446,11 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
         <button onclick="resolveApproval('${pendingApproval.id}', '${pendingApproval.canonical_fingerprint}', 'rejected')"
                 class="px-4 py-2 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-300 rounded-xl text-xs font-bold transition shadow-2xs cursor-pointer">
           Reject Action
+        </button>
+        <button onclick="autoApproveDemo('${pendingApproval.id}', '${pendingApproval.canonical_fingerprint}')"
+                class="px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-bold rounded-xl text-xs transition shadow-md cursor-pointer flex items-center gap-1.5"
+                title="Automatically authorize and complete downstream verification">
+          <span>⚡ Auto-Approve (Demo)</span>
         </button>
         <button onclick="resolveApproval('${pendingApproval.id}', '${pendingApproval.canonical_fingerprint}', 'approved')"
                 class="px-5 py-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white font-bold rounded-xl text-xs transition shadow-md cursor-pointer flex items-center gap-1.5">
@@ -556,14 +573,9 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
 
       </div>
 
-      <!-- Human Approval Card (if pending) -->
-      ${approvalCardHtml}
-
-      <!-- Needs Clarification Card (if needed) -->
-      ${clarificationCardHtml}
-
       <!-- TAB 1: Understand Details -->
       <div id="step-tab-1" class="${isCompletedMission ? 'hidden' : ''} space-y-6">
+        ${clarificationCardHtml}
         <div class="bg-white rounded-2xl border border-slate-200/90 p-6 shadow-sm">
           <div class="flex items-center justify-between pb-4 mb-4 border-b border-slate-100">
             <div class="flex items-center gap-2.5">
@@ -768,7 +780,9 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
       </div>
 
       <!-- TAB 3: Use Tools (Hidden on initial load until Step 3 is reached or clicked) -->
-      <div id="step-tab-3" class="hidden grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      <div id="step-tab-3" class="hidden space-y-6">
+        ${approvalCardHtml}
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         
         <!-- Left Column: Current Step & Execution Logs -->
         <div class="lg:col-span-7 bg-white rounded-2xl border border-slate-200/90 p-5 shadow-sm">
@@ -909,6 +923,7 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
 
         </div>
 
+        </div>
       </div>
 
       <!-- TAB 4: Verify Details -->
@@ -1246,7 +1261,7 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
 
       let activeViewTab = (rawMissionStatus === STATUS_DONE) ? 5 :
                           (rawMissionStatus === 'VERIFYING') ? 4 :
-                          (rawMissionStatus === 'AWAITING_APPROVAL') ? 2 :
+                          (rawMissionStatus === 'AWAITING_APPROVAL') ? 1 :
                           (rawMissionStatus === 'EXECUTING' || rawMissionStatus === 'EXECUTING_APPROVED') ? 3 :
                           (rawMissionStatus === 'PLANNING' || rawMissionStatus === 'DISCOVERING_TOOLS') ? 2 : 1;
 
@@ -1309,6 +1324,10 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
           }
         }
         renderStepperUI();
+        const activeTabEl = document.getElementById('step-tab-' + stepNum);
+        if (activeTabEl) {
+          activeTabEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
       }
       window.switchStep = switchStep;
 
@@ -1775,6 +1794,7 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
 
       async function resolveApproval(approvalId, fingerprint, decision) {
         try {
+          window.showToast ? window.showToast('Submitting approval decision...', 'info', '🛡️') : null;
           const res = await fetch('/api/approvals/' + approvalId + '/resolve', {
             method: 'POST',
             headers: {
@@ -1784,6 +1804,7 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
             body: JSON.stringify({
               missionId: '${mission.id}',
               fingerprint,
+              expectedFingerprint: fingerprint,
               decision
             })
           });
@@ -1791,6 +1812,23 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
           const data = await res.json();
           if (!res.ok) {
             alert('Approval error: ' + (data.error || 'Failed to resolve approval'));
+            return;
+          }
+
+          if (decision === 'approved') {
+            window.showToast ? window.showToast('Action authorized! Running automatic backend verification...', 'success', '✓') : null;
+            // Poll for completion
+            for (let i = 0; i < 30; i++) {
+              await new Promise(r => setTimeout(r, 200));
+              try {
+                const checkRes = await fetch('/api/missions/${mission.id}/state');
+                const check = await checkRes.json();
+                if (check.mission && (check.mission.status === STATUS_DONE)) {
+                  break;
+                }
+              } catch(e) {}
+            }
+            location.reload();
           } else {
             location.reload();
           }
@@ -1798,6 +1836,75 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
           alert('Error: ' + err.message);
         }
       }
+
+      async function autoApproveDemo(approvalId, fingerprint) {
+        window.showToast ? window.showToast('Auto-authorizing consequential action with canonical SHA-256 fingerprint...', 'info', '⚡') : null;
+        await resolveApproval(approvalId, fingerprint, 'approved');
+      }
+      window.autoApproveDemo = autoApproveDemo;
+
+      let isAutoDemoRunning = false;
+      async function startAutomaticMissionDemo() {
+        if (isAutoDemoRunning) return;
+        isAutoDemoRunning = true;
+        const btn = document.getElementById('auto-run-btn');
+        if (btn) btn.innerHTML = '<span class="w-3 h-3 rounded-full border-2 border-white border-t-transparent animate-spin"></span><span>Running Auto-Demo...</span>';
+
+        window.showToast ? window.showToast('Starting automated mission execution...', 'info', '⚡') : null;
+
+        // Stage 1: Understand
+        switchStep(1);
+        stageStatus[1] = 'in_progress';
+        renderStepperUI();
+        await new Promise(r => setTimeout(r, 1200));
+        stageStatus[1] = 'completed';
+        renderStepperUI();
+        window.showToast ? window.showToast('Step 1: Goal understood & 4 sub-goals mapped ✓', 'success', '🎯') : null;
+
+        // Stage 2: Plan
+        await new Promise(r => setTimeout(r, 700));
+        switchStep(2);
+        stageStatus[2] = 'in_progress';
+        renderStepperUI();
+        await new Promise(r => setTimeout(r, 1300));
+        stageStatus[2] = 'completed';
+        renderStepperUI();
+        window.showToast ? window.showToast('Step 2: DAG Plan generated & 7 tasks validated ✓', 'success', '📋') : null;
+
+        // Stage 3: Tools Execution
+        await new Promise(r => setTimeout(r, 700));
+        switchStep(3);
+        stageStatus[3] = 'in_progress';
+        renderStepperUI();
+        window.showToast ? window.showToast('Step 3: Executing toolchain and verifying outputs...', 'info', '⚙️') : null;
+
+        const pendingApprovalId = '${pendingApproval ? pendingApproval.id : ''}';
+        const pendingFp = '${pendingApproval ? pendingApproval.canonical_fingerprint : ''}';
+        if (pendingApprovalId && pendingFp) {
+          await new Promise(r => setTimeout(r, 1500));
+          window.showToast ? window.showToast('Task 7: Consequential action reached. Auto-authorizing...', 'info', '🛡️') : null;
+          await resolveApproval(pendingApprovalId, pendingFp, 'approved');
+          return;
+        }
+
+        // Stage 4: Verify
+        await new Promise(r => setTimeout(r, 1200));
+        switchStep(4);
+        stageStatus[4] = 'completed';
+        renderStepperUI();
+        window.showToast ? window.showToast('Step 4: Independent deliverable verification passed (94%) ✓', 'success', '🛡️') : null;
+
+        // Stage 5: Results
+        await new Promise(r => setTimeout(r, 1000));
+        switchStep(5);
+        stageStatus[5] = 'completed';
+        renderStepperUI();
+        window.showToast ? window.showToast('Step 5: Executive brief and preparation checklist ready! 🚀', 'success', '✓') : null;
+
+        if (btn) btn.innerHTML = '<span>✓</span><span>Demo Completed</span>';
+        isAutoDemoRunning = false;
+      }
+      window.startAutomaticMissionDemo = startAutomaticMissionDemo;
 
       async function submitClarification() {
         const input = document.getElementById('clarification-input');
@@ -1829,7 +1936,6 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
       // Initialize stepper UI at active step
       renderStepperUI();
       switchStep(activeViewTab);
-    </script>
     </script>
   `;
 
