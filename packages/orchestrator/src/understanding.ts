@@ -100,33 +100,70 @@ export class ObjectiveUnderstandingEngine {
       return ObjectiveUnderstandingSchema.parse(parsedWrite);
     }
 
-    // Check for meeting preparation scenario
+    // Check for meeting preparation or productivity assistant scenario (calendar, email, meetings)
+    const hasEmail = /email|mail|inbox|gmail|message/i.test(trimmed);
+    const hasCalendar = /calendar|schedule|meeting|event|appointment|availability/i.test(trimmed);
     const isMeetingPrep = lower.includes('meeting') && (lower.includes('tomorrow') || lower.includes('prepare') || lower.includes('calendar'));
+    const isProductivityPrep = isMeetingPrep || (hasCalendar && (hasEmail || /prepare|checklist|notes|remind/i.test(trimmed)));
 
-    if (isMeetingPrep) {
+    if (isProductivityPrep) {
+      const topic = lower.includes('roadmap')
+        ? 'Product Roadmap Discussion'
+        : (() => {
+            const match = trimmed.match(/(?:about|for|regarding|on)\s+([^.,;!?\n]+)/i);
+            if (match && match[1]) {
+              const clean = match[1].trim().replace(/^(the|a|an|my|our)\s+/i, '');
+              if (clean.length > 2 && clean.length < 50) {
+                return clean.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+              }
+            }
+            if (/interview/i.test(trimmed)) return 'Candidate Interview & Assessment';
+            if (/budget|financial/i.test(trimmed)) return 'Budget & Financial Planning';
+            if (/contract|proposal/i.test(trimmed)) return 'Client Proposal Review';
+            if (/launch|release/i.test(trimmed)) return 'Product Launch Review';
+            return 'Product Roadmap Discussion';
+          })();
+
+      const targetTime = (() => {
+        const match = trimmed.match(/tomorrow\s+at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i);
+        if (match && match[1]) return `Tomorrow at ${match[1].toUpperCase()}`;
+        if (/tomorrow morning/i.test(trimmed)) return 'Tomorrow at 09:00 AM';
+        if (/tomorrow afternoon/i.test(trimmed)) return 'Tomorrow at 02:00 PM';
+        if (/tomorrow/i.test(trimmed)) return 'Tomorrow, 10:00 AM';
+        if (/next week/i.test(trimmed)) return 'Next Week';
+        if (/monday/i.test(trimmed)) return 'Monday, 10:00 AM';
+        return 'Tomorrow, 10:00 AM';
+      })();
+
       const parsed: ObjectiveUnderstanding = {
         originalObjective: trimmed,
-        desiredOutcome: 'Comprehensive meeting readiness packet including context, documents, analysis, checklist, conflict assessment, and scheduled reminder.',
+        desiredOutcome: `Comprehensive readiness packet for ${topic} (${targetTime}) including context, ${hasEmail ? 'email verification, ' : ''}documents, analysis, checklist, conflict assessment, and scheduled reminder.`,
         constraints: [
-          'Meeting is scheduled for tomorrow',
-          'Must verify relevant roadmap documents before preparation',
+          `Schedule target is ${targetTime}`,
+          'Must verify relevant documents and correspondence before preparation',
           'Reminders are external mutations and require human approval'
         ],
-        targetTime: 'Tomorrow, 10:00 AM',
+        targetTime,
         requiredDeliverables: [
-          'Meeting context extraction',
+          'Calendar and context extraction',
+          ...(hasEmail ? ['Email verification and message synthesis'] : []),
           'Document analysis and gap identification',
           'Conflict and schedule alignment check',
           'Preparation checklist',
           'Approved reminder'
         ],
         knownContext: {
-          meetingTopic: 'Product Roadmap Discussion'
+          topic,
+          meetingTopic: topic,
+          targetTime,
+          hasEmail,
+          hasCalendar
         },
         ambiguities: [],
         potentiallyConsequentialActions: ['calendar_create_reminder'],
         completionCriteria: [
           'Calendar and meeting details retrieved',
+          ...(hasEmail ? ['Relevant emails verified'] : []),
           'Relevant documents searched and analyzed',
           'Conflicts evaluated',
           'Checklist created and persisted',

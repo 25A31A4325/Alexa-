@@ -131,7 +131,16 @@ export class MissionPlanner {
       }
     }
 
-    if (isMeetingPrep) {
+    const isProductivityPrep = isMeetingPrep ||
+      Boolean(understanding.knownContext?.hasCalendar && (understanding.knownContext?.hasEmail || /prepare|checklist|notes|remind/i.test(understanding.originalObjective)));
+
+    if (isProductivityPrep) {
+      const dynamicTopic = (understanding.knownContext?.topic as string)
+        || (understanding.knownContext?.meetingTopic as string)
+        || 'Product Roadmap Discussion';
+      const dynamicTime = (understanding.targetTime as string) || 'Tomorrow at 09:30 AM';
+      const hasEmail = Boolean(understanding.knownContext?.hasEmail);
+
       // 1. Context retrieval
       tasks.push({
         id: `task-${missionId}-1`,
@@ -145,14 +154,14 @@ export class MissionPlanner {
         maxRetries: 2
       });
 
-      // 2. Search knowledge
+      // 2. Search knowledge / emails
       tasks.push({
         id: `task-${missionId}-2`,
         stepIndex: 2,
-        title: 'Identify attendee profiles and agenda requirements',
-        description: 'Search demonstration knowledge base for meeting roadmap docs',
+        title: hasEmail ? `Search emails and knowledge base for ${dynamicTopic}` : 'Identify attendee profiles and agenda requirements',
+        description: `Search demonstration repository for ${dynamicTopic} correspondence and documents`,
         toolName: 'search_knowledge',
-        toolInputTemplate: { query: 'Roadmap', limit: 3 },
+        toolInputTemplate: { query: dynamicTopic.includes('Roadmap') ? 'Roadmap' : dynamicTopic, limit: 3 },
         dependsOn: [`task-${missionId}-1`],
         requiresApproval: false,
         maxRetries: 2
@@ -162,8 +171,8 @@ export class MissionPlanner {
       tasks.push({
         id: `task-${missionId}-3`,
         stepIndex: 3,
-        title: 'Search knowledge base for Q4 Product Roadmap',
-        description: 'Fetch complete content of Q4 Product Roadmap brief',
+        title: `Search knowledge base for ${dynamicTopic}`,
+        description: `Fetch complete content and specifications for ${dynamicTopic}`,
         toolName: 'retrieve_document',
         toolInputTemplate: { documentId: 'doc-q4-roadmap' },
         dependsOn: [`task-${missionId}-2`],
@@ -197,7 +206,7 @@ export class MissionPlanner {
         toolName: 'detect_conflict',
         toolInputTemplate: {
           items: [
-            { id: 'meeting-1', timeSlot: '10:00 AM - 11:00 AM', topic: 'Product Roadmap Discussion' },
+            { id: 'meeting-1', timeSlot: dynamicTime || '10:00 AM - 11:00 AM', topic: dynamicTopic },
             { id: 'focus-time', timeSlot: '02:00 PM - 03:00 PM', topic: 'Architecture Focus' }
           ]
         },
@@ -215,8 +224,8 @@ export class MissionPlanner {
         toolName: 'create_task',
         toolInputTemplate: {
           missionId,
-          title: 'Review Q4 Feature Specs and APAC Strategy',
-          description: 'Preparation items extracted from roadmap analysis',
+          title: `Action Checklist for ${dynamicTopic}`,
+          description: `Preparation items and action checklist synthesized for ${dynamicTopic}`,
           priority: 'high'
         },
         dependsOn: [`task-${missionId}-4`, `task-${missionId}-5`],
@@ -234,8 +243,8 @@ export class MissionPlanner {
         toolInputTemplate: {
           actionType: 'calendar_create_reminder',
           parameters: {
-            title: 'Prep for Product Roadmap Discussion',
-            reminderTime: 'Tomorrow at 09:30 AM'
+            title: `Prep for ${dynamicTopic}`,
+            reminderTime: dynamicTime
           }
         },
         dependsOn: [`task-${missionId}-6`],
