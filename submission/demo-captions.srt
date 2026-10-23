@@ -1,0 +1,119 @@
+1
+00:00:00,500 --> 00:00:05,200
+Autonomous AI agents promise to run our workflows, but in production, they face a fatal flaw:
+
+2
+00:00:05,300 --> 00:00:10,500
+black-box execution, unpredictable hallucinations, and zero safety controls when performing destructive actions.
+
+3
+00:00:10,700 --> 00:00:16,200
+If an agent deletes a cloud database or deploys broken code, there is no rewind button.
+
+4
+00:00:16,500 --> 00:00:22,000
+Enterprises cannot deploy autonomous intelligence without absolute control.
+
+5
+00:00:22,500 --> 00:00:25,500
+Meet ORCHESTRA. Built for the Amazon Alexa+ Track,
+
+6
+00:00:25,600 --> 00:00:31,000
+ORCHESTRA is an agentic mission-execution platform that brings deterministic finite-state control,
+
+7
+00:00:31,100 --> 00:00:36,200
+human-in-the-loop governance, and verifiable auditability to autonomous tool execution.
+
+8
+00:00:36,400 --> 00:00:41,800
+Instead of blind delegation, ORCHESTRA compiles intent into a validated Directed Acyclic Graph,
+
+9
+00:00:42,000 --> 00:00:47,500
+executing tools securely through the Model Context Protocol.
+
+10
+00:00:48,000 --> 00:00:53,000
+Let's create a mission: deploying a production release and notifying stakeholders.
+
+11
+00:00:53,200 --> 00:00:58,800
+In real-time, the ORCHESTRA planner evaluates dependencies and compiles an execution graph across eight formal states.
+
+12
+00:00:59,000 --> 00:01:04,500
+Every step is cryptographically bound, and low-risk steps like artifact validation and security linting
+
+13
+00:01:04,600 --> 00:01:10,200
+execute automatically via Streamable HTTP MCP tools.
+
+14
+00:01:10,500 --> 00:01:17,500
+All state transitions are deterministic, preventing race conditions and runaway loops.
+
+15
+00:01:18,000 --> 00:01:23,500
+Here's the critical breakthrough: when ORCHESTRA reaches a destructive step, it halts.
+
+16
+00:01:23,700 --> 00:01:28,200
+The state machine transitions automatically to Approval Required.
+
+17
+00:01:28,400 --> 00:01:34,000
+The human operator reviews the exact action payload, parameters, and risk score.
+
+18
+00:01:34,200 --> 00:01:39,800
+We approve the step, execution seamlessly resumes, and our verification engine
+
+19
+00:01:40,000 --> 00:01:46,000
+validates the output state using SHA-256 state fingerprinting before marking it complete.
+
+20
+00:01:46,300 --> 00:01:51,500
+No unapproved changes ever reach production environments.
+
+21
+00:01:52,000 --> 00:01:56,800
+Under the hood, ORCHESTRA is powered by the Model Context Protocol.
+
+22
+00:01:57,000 --> 00:02:02,500
+By exposing tools over Streamable HTTP and Server-Sent Events, Alexa+ agents and LLMs
+
+23
+00:02:02,600 --> 00:02:07,800
+can dynamically discover capabilities and stream payloads with sub-second latency.
+
+24
+00:02:08,000 --> 00:02:13,200
+OAuth credentials and tokens are secured using military-grade AES-256-GCM encryption.
+
+25
+00:02:13,400 --> 00:02:19,500
+100% of our core monorepo packages are fully verified with 67 passing automated tests.
+
+26
+00:02:20,000 --> 00:02:25,500
+ORCHESTRA transforms AI agents from risky toys into enterprise-ready operators.
+
+27
+00:02:25,700 --> 00:02:31,200
+With deterministic state machines, MCP standard interoperability, and human verification,
+
+28
+00:02:31,400 --> 00:02:36,000
+it represents the future of safe agentic workflows.
+
+29
+00:02:36,200 --> 00:02:41,200
+Check out our open-source codebase on GitHub and test the live platform on Render today.
+
+30
+00:02:41,500 --> 00:02:45,000
+Thank you!

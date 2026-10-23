@@ -1,0 +1,2 @@
+file 'C:/Users/MOHAN SAI/Desktop/Alexa+/submission/assets/vid_scene2_shot0.mp4'
+file 'C:/Users/MOHAN SAI/Desktop/Alexa+/submission/assets/vid_scene2_shot1.mp4'

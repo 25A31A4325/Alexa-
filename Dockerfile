@@ -11,10 +11,10 @@ COPY apps ./apps
 
 RUN npm install --legacy-peer-deps
 
-# Build dependent mcp-server workspace so dist files are generated
-RUN npm run build --workspace=packages/mcp-server || true
+# Build all monorepo workspaces cleanly
+RUN npm run build
 
-EXPOSE 3001
+EXPOSE 3000
 
-# Execute web server directly
-CMD ["npx", "tsx", "apps/web/src/server.ts"]
+# Execute web server from compiled dist
+CMD ["node", "apps/web/dist/server.js"]
