@@ -201,10 +201,11 @@ export class AuthService {
     const now = new Date().toISOString();
     const displayName = name?.trim() || email.split('@')[0] || 'User';
 
+    const emailVerified = process.env.RESEND_API_KEY ? 0 : 1;
     this.db.prepare(`
       INSERT INTO auth_users (id, email, password_hash, name, email_verified, created_at, updated_at)
-      VALUES (?, ?, ?, ?, 0, ?, ?)
-    `).run(userId, email, hashed, displayName, now, now);
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(userId, email, hashed, displayName, emailVerified, now, now);
 
     const verificationToken = this.createEmailToken(userId, 'verify_email', VERIFY_TOKEN_LIFETIME_MS);
     try {
@@ -247,7 +248,7 @@ export class AuthService {
     if (!matches) {
       throw new AuthServiceError('Invalid email or password.', 'INVALID_CREDENTIALS', 401);
     }
-    if (!row.email_verified) {
+    if (!row.email_verified && process.env.RESEND_API_KEY) {
       throw new AuthServiceError('Verify your email address before signing in.', 'EMAIL_NOT_VERIFIED', 403);
     }
 
