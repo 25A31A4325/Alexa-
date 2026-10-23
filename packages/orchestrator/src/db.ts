@@ -4,9 +4,11 @@ import * as fs from 'node:fs';
 import {
   MissionStatus,
   TaskStatus,
+  TaskVerificationStatus,
   MissionRow,
   ExecutionPlanRow,
   MissionTaskRow,
+  TaskVerificationRecordRow,
   ApprovalRow,
   VerificationResultRow,
   ActivityEventRow,
@@ -79,6 +81,8 @@ export class OrchestratorDatabase {
         result_json TEXT,
         error_message TEXT,
         duration_ms INTEGER NOT NULL DEFAULT 0,
+        verification_status TEXT NOT NULL DEFAULT 'pending',
+        verification_evidence_json TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         FOREIGN KEY (mission_id) REFERENCES missions(id) ON DELETE CASCADE,
@@ -91,6 +95,23 @@ export class OrchestratorDatabase {
         PRIMARY KEY (task_id, depends_on_task_id),
         FOREIGN KEY (task_id) REFERENCES mission_tasks(id) ON DELETE CASCADE,
         FOREIGN KEY (depends_on_task_id) REFERENCES mission_tasks(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS task_verification_records (
+        id TEXT PRIMARY KEY,
+        mission_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        attempt_number INTEGER NOT NULL,
+        verification_status TEXT NOT NULL,
+        expected_outcome TEXT NOT NULL,
+        actual_outcome TEXT NOT NULL,
+        evidence_json TEXT NOT NULL,
+        failure_reason TEXT,
+        started_at TEXT NOT NULL,
+        completed_at TEXT NOT NULL,
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        FOREIGN KEY (mission_id) REFERENCES missions(id) ON DELETE CASCADE,
+        FOREIGN KEY (task_id) REFERENCES mission_tasks(id) ON DELETE CASCADE
       );
 
       CREATE TABLE IF NOT EXISTS approvals (
@@ -161,6 +182,14 @@ export class OrchestratorDatabase {
     const activityColumns = this.db.prepare('PRAGMA table_info(activity_events)').all() as Array<{ name: string }>;
     if (!activityColumns.some((column) => column.name === 'owner_session_id')) {
       this.db.exec('ALTER TABLE activity_events ADD COLUMN owner_session_id TEXT');
+    }
+
+    const taskColumns = this.db.prepare('PRAGMA table_info(mission_tasks)').all() as Array<{ name: string }>;
+    if (!taskColumns.some((column) => column.name === 'verification_status')) {
+      this.db.exec("ALTER TABLE mission_tasks ADD COLUMN verification_status TEXT NOT NULL DEFAULT 'pending'");
+    }
+    if (!taskColumns.some((column) => column.name === 'verification_evidence_json')) {
+      this.db.exec('ALTER TABLE mission_tasks ADD COLUMN verification_evidence_json TEXT');
     }
   }
 
@@ -277,12 +306,14 @@ export class OrchestratorDatabase {
     toolInputTemplate?: string;
     requiresApproval?: boolean;
     maxRetries?: number;
+    verificationStatus?: TaskVerificationStatus;
+    verificationEvidenceJson?: string;
   }): MissionTaskRow {
     const now = new Date().toISOString();
     this.db.prepare(`
       INSERT INTO mission_tasks 
-      (id, mission_id, plan_id, step_index, title, description, tool_name, tool_input_template, status, retry_count, max_retries, requires_approval, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?)
+      (id, mission_id, plan_id, step_index, title, description, tool_name, tool_input_template, status, retry_count, max_retries, requires_approval, verification_status, verification_evidence_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?, ?)
     `).run(
       task.id,
       task.missionId,
@@ -294,6 +325,8 @@ export class OrchestratorDatabase {
       task.toolInputTemplate || '{}',
       task.maxRetries || 2,
       task.requiresApproval ? 1 : 0,
+      task.verificationStatus || 'pending',
+      task.verificationEvidenceJson || null,
       now,
       now
     );
@@ -331,14 +364,85 @@ export class OrchestratorDatabase {
     status: TaskStatus,
     resultJson: string | null = null,
     errorMessage: string | null = null,
-    durationMs: number = 0
+    durationMs: number = 0,
+    verificationStatus?: TaskVerificationStatus,
+    verificationEvidenceJson?: string | null
+  ): void {
+    const now = new Date().toISOString();
+    if (verificationStatus !== undefined) {
+      this.db.prepare(`
+        UPDATE mission_tasks 
+        SET status = ?, result_json = COALESCE(?, result_json), error_message = ?, duration_ms = ?,
+            verification_status = ?, verification_evidence_json = COALESCE(?, verification_evidence_json), updated_at = ?
+        WHERE id = ?
+      `).run(status, resultJson, errorMessage, durationMs, verificationStatus, verificationEvidenceJson ?? null, now, taskId);
+    } else {
+      this.db.prepare(`
+        UPDATE mission_tasks 
+        SET status = ?, result_json = COALESCE(?, result_json), error_message = ?, duration_ms = ?, updated_at = ?
+        WHERE id = ?
+      `).run(status, resultJson, errorMessage, durationMs, now, taskId);
+    }
+  }
+
+  public updateTaskVerification(
+    taskId: string,
+    verificationStatus: TaskVerificationStatus,
+    evidenceJson: string | null = null
   ): void {
     const now = new Date().toISOString();
     this.db.prepare(`
       UPDATE mission_tasks 
-      SET status = ?, result_json = COALESCE(?, result_json), error_message = ?, duration_ms = ?, updated_at = ?
+      SET verification_status = ?, verification_evidence_json = COALESCE(?, verification_evidence_json), updated_at = ?
       WHERE id = ?
-    `).run(status, resultJson, errorMessage, durationMs, now, taskId);
+    `).run(verificationStatus, evidenceJson, now, taskId);
+  }
+
+  public recordTaskVerification(rec: {
+    id: string;
+    missionId: string;
+    taskId: string;
+    attemptNumber: number;
+    verificationStatus: TaskVerificationStatus;
+    expectedOutcome: string;
+    actualOutcome: string;
+    evidenceJson: string;
+    failureReason?: string | null;
+    startedAt: string;
+    completedAt: string;
+    retryCount?: number;
+  }): TaskVerificationRecordRow {
+    this.db.prepare(`
+      INSERT INTO task_verification_records 
+      (id, mission_id, task_id, attempt_number, verification_status, expected_outcome, actual_outcome, evidence_json, failure_reason, started_at, completed_at, retry_count)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      rec.id,
+      rec.missionId,
+      rec.taskId,
+      rec.attemptNumber,
+      rec.verificationStatus,
+      rec.expectedOutcome,
+      rec.actualOutcome,
+      rec.evidenceJson,
+      rec.failureReason || null,
+      rec.startedAt,
+      rec.completedAt,
+      rec.retryCount || 0
+    );
+    return this.db.prepare('SELECT * FROM task_verification_records WHERE id = ?').get(rec.id) as unknown as TaskVerificationRecordRow;
+  }
+
+  public getTaskVerifications(taskId: string): TaskVerificationRecordRow[] {
+    return this.db.prepare(`
+      SELECT * FROM task_verification_records WHERE task_id = ? ORDER BY attempt_number ASC
+    `).all(taskId) as unknown as TaskVerificationRecordRow[];
+  }
+
+  public getTaskVerificationsForMission(missionId: string): TaskVerificationRecordRow[] {
+    return this.db.prepare(`
+      SELECT * FROM task_verification_records WHERE mission_id = ? ORDER BY started_at ASC
+    `).all(missionId) as unknown as TaskVerificationRecordRow[];
   }
 
   public incrementTaskRetry(taskId: string): number {

@@ -97,9 +97,9 @@ export function ensureDemoMeetingPrep(db: OrchestratorDatabase) {
         requiresApproval: t.requiresApproval || false
       });
       if (t.status === 'completed') {
-        db.updateTaskStatus(t.id, 'completed', t.resultJson || '', null, t.durationMs);
+        db.updateTaskStatus(t.id, 'completed', t.resultJson || '', null, t.durationMs, 'verified', JSON.stringify({ verified: true }));
       } else if (t.status === 'in_progress') {
-        db.updateTaskStatus(t.id, 'in_progress');
+        db.updateTaskStatus(t.id, 'in_progress', null, null, 0, 'verifying');
       }
     }
 
@@ -149,6 +149,7 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
 
   const dbTasks = db.getTasksForMission(missionId);
   const invocations = db.getToolInvocationsForMission(missionId);
+  const taskVerifications = db.getTaskVerificationsForMission(missionId);
   const pendingApproval = (db as any).db.prepare("SELECT * FROM approvals WHERE mission_id = ? AND status = 'pending'").get(missionId);
   const verification = db.getVerificationResult(missionId);
   const confidenceLabel = verification
@@ -497,13 +498,13 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
                     <div id="subgoal-status-1" class="text-[10px] ${isCompletedMission ? 'text-slate-500' : 'text-blue-600 font-semibold'} mt-0.5">${isCompletedMission ? 'Identified: Tomorrow 10:00 AM' : 'Analyzing calendar events...'}</div>
                   </div>
                 </div>
-                <button type="button" id="subgoal-action-1" onclick="event.stopPropagation(); window.toggleSubgoal(1)" class="subgoal-action-btn flex-shrink-0 text-[11px] font-semibold px-2.5 py-1 rounded-lg border transition flex items-center gap-1 cursor-pointer ${isCompletedMission ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-300 shadow-xs'}">
-                  <span>${isCompletedMission ? '✓' : '◯'}</span>
-                  <span>${isCompletedMission ? 'Verified' : 'Verify'}</span>
-                </button>
+                <div class="subgoal-action-badge flex-shrink-0 text-[11px] font-semibold px-2.5 py-1 rounded-lg border flex items-center gap-1 ${isCompletedMission ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : 'bg-slate-100 text-slate-600 border-slate-200'}">
+                  <span>${isCompletedMission ? '✓' : '●'}</span>
+                  <span>${isCompletedMission ? 'Verified' : 'Ready'}</span>
+                </div>
               </div>
 
-              <div id="subgoal-item-2" onclick="window.toggleSubgoal(2)" class="flex items-start justify-between gap-2.5 p-3 rounded-xl bg-slate-50 border border-slate-200/80 transition-all cursor-pointer hover:shadow-xs">
+              <div id="subgoal-item-2" class="flex items-start justify-between gap-2.5 p-3 rounded-xl bg-slate-50 border border-slate-200/80 transition-all hover:shadow-xs">
                 <div class="flex items-start gap-2.5 min-w-0">
                   <div id="subgoal-icon-2" class="w-5 h-5 rounded-full ${isCompletedMission ? 'bg-emerald-600 text-white font-bold' : 'border-2 border-slate-300 text-slate-400 font-medium'} flex items-center justify-center text-[10px] flex-shrink-0">
                     ${isCompletedMission ? '✓' : '2'}
@@ -513,13 +514,13 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
                     <div id="subgoal-status-2" class="text-[10px] text-slate-400 mt-0.5">${isCompletedMission ? 'Retrieved 2 documents' : 'Pending'}</div>
                   </div>
                 </div>
-                <button type="button" id="subgoal-action-2" onclick="event.stopPropagation(); window.toggleSubgoal(2)" class="subgoal-action-btn flex-shrink-0 text-[11px] font-semibold px-2.5 py-1 rounded-lg border transition flex items-center gap-1 cursor-pointer ${isCompletedMission ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-300 shadow-xs'}">
-                  <span>${isCompletedMission ? '✓' : '◯'}</span>
-                  <span>${isCompletedMission ? 'Verified' : 'Verify'}</span>
-                </button>
+                <div class="subgoal-action-badge flex-shrink-0 text-[11px] font-semibold px-2.5 py-1 rounded-lg border flex items-center gap-1 ${isCompletedMission ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : 'bg-slate-100 text-slate-600 border-slate-200'}">
+                  <span>${isCompletedMission ? '✓' : '●'}</span>
+                  <span>${isCompletedMission ? 'Verified' : 'Ready'}</span>
+                </div>
               </div>
 
-              <div id="subgoal-item-3" onclick="window.toggleSubgoal(3)" class="flex items-start justify-between gap-2.5 p-3 rounded-xl bg-slate-50 border border-slate-200/80 transition-all cursor-pointer hover:shadow-xs">
+              <div id="subgoal-item-3" class="flex items-start justify-between gap-2.5 p-3 rounded-xl bg-slate-50 border border-slate-200/80 transition-all hover:shadow-xs">
                 <div class="flex items-start gap-2.5 min-w-0">
                   <div id="subgoal-icon-3" class="w-5 h-5 rounded-full ${isCompletedMission ? 'bg-emerald-600 text-white font-bold' : 'border-2 border-slate-300 text-slate-400 font-medium'} flex items-center justify-center text-[10px] flex-shrink-0">
                     ${isCompletedMission ? '✓' : '3'}
@@ -529,13 +530,13 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
                     <div id="subgoal-status-3" class="text-[10px] text-slate-400 mt-0.5">${isCompletedMission ? 'Extracted 3 topics, 2 risks' : 'Pending'}</div>
                   </div>
                 </div>
-                <button type="button" id="subgoal-action-3" onclick="event.stopPropagation(); window.toggleSubgoal(3)" class="subgoal-action-btn flex-shrink-0 text-[11px] font-semibold px-2.5 py-1 rounded-lg border transition flex items-center gap-1 cursor-pointer ${isCompletedMission ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-300 shadow-xs'}">
-                  <span>${isCompletedMission ? '✓' : '◯'}</span>
-                  <span>${isCompletedMission ? 'Verified' : 'Verify'}</span>
-                </button>
+                <div class="subgoal-action-badge flex-shrink-0 text-[11px] font-semibold px-2.5 py-1 rounded-lg border flex items-center gap-1 ${isCompletedMission ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : 'bg-slate-100 text-slate-600 border-slate-200'}">
+                  <span>${isCompletedMission ? '✓' : '●'}</span>
+                  <span>${isCompletedMission ? 'Verified' : 'Ready'}</span>
+                </div>
               </div>
 
-              <div id="subgoal-item-4" onclick="window.toggleSubgoal(4)" class="flex items-start justify-between gap-2.5 p-3 rounded-xl bg-slate-50 border border-slate-200/80 transition-all cursor-pointer hover:shadow-xs">
+              <div id="subgoal-item-4" class="flex items-start justify-between gap-2.5 p-3 rounded-xl bg-slate-50 border border-slate-200/80 transition-all hover:shadow-xs">
                 <div class="flex items-start gap-2.5 min-w-0">
                   <div id="subgoal-icon-4" class="w-5 h-5 rounded-full ${isCompletedMission ? 'bg-emerald-600 text-white font-bold' : 'border-2 border-slate-300 text-slate-400 font-medium'} flex items-center justify-center text-[10px] flex-shrink-0">
                     ${isCompletedMission ? '✓' : '4'}
@@ -545,10 +546,10 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
                     <div id="subgoal-status-4" class="text-[10px] text-slate-400 mt-0.5">${isCompletedMission ? 'Action checklist ready' : 'Pending'}</div>
                   </div>
                 </div>
-                <button type="button" id="subgoal-action-4" onclick="event.stopPropagation(); window.toggleSubgoal(4)" class="subgoal-action-btn flex-shrink-0 text-[11px] font-semibold px-2.5 py-1 rounded-lg border transition flex items-center gap-1 cursor-pointer ${isCompletedMission ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-300 shadow-xs'}">
-                  <span>${isCompletedMission ? '✓' : '◯'}</span>
-                  <span>${isCompletedMission ? 'Verified' : 'Verify'}</span>
-                </button>
+                <div class="subgoal-action-badge flex-shrink-0 text-[11px] font-semibold px-2.5 py-1 rounded-lg border flex items-center gap-1 ${isCompletedMission ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : 'bg-slate-100 text-slate-600 border-slate-200'}">
+                  <span>${isCompletedMission ? '✓' : '●'}</span>
+                  <span>${isCompletedMission ? 'Verified' : 'Ready'}</span>
+                </div>
               </div>
             </div>
           </div>
@@ -575,7 +576,7 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
               </div>
             </div>
             <span id="plan-dag-badge" class="text-xs font-semibold ${isCompletedMission ? 'text-emerald-700 bg-emerald-50 border border-emerald-200' : 'text-blue-700 bg-blue-50 border border-blue-200'} px-2.5 py-0.5 rounded-full">
-              ${isCompletedMission ? 'DAG Plan Validated (7/7 Verified)' : 'Verification Pending (0/7 Ready)'}
+              ${isCompletedMission ? 'DAG Plan Validated (All Tasks Verified)' : 'Autonomous Verification Active'}
             </span>
           </div>
 
@@ -583,9 +584,25 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
             ${tasksToRender.map((t: any, idx: number) => {
               const taskNum = idx + 1;
               const isTaskCompleted = isCompletedMission || t.status === 'completed';
-              const isTaskActive = !isCompletedMission && taskNum === 1;
+              const isTaskActive = !isCompletedMission && (t.status === 'in_progress' || (taskNum === 1 && !isTaskCompleted));
               const hasApprovalGate = t.requiresApproval || t.requires_approval;
+              const verStatus = t.verification_status || (isTaskCompleted ? 'verified' : (isTaskActive ? 'verifying' : 'pending'));
               
+              let verBadgeHtml = '';
+              if (verStatus === 'verified' || isTaskCompleted) {
+                verBadgeHtml = `<span id="plan-task-action-${taskNum}" class="plan-task-btn inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-xl border border-emerald-300 bg-emerald-50 text-emerald-700 shadow-2xs"><span>✓</span><span>Verified</span></span>`;
+              } else if (verStatus === 'verifying') {
+                verBadgeHtml = `<span id="plan-task-action-${taskNum}" class="plan-task-btn inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-xl border border-blue-300 bg-blue-50 text-blue-700 shadow-2xs animate-pulse"><span class="w-2 h-2 rounded-full bg-blue-600 animate-ping"></span><span>Verifying...</span></span>`;
+              } else if (verStatus === 'retrying') {
+                verBadgeHtml = `<span id="plan-task-action-${taskNum}" class="plan-task-btn inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-xl border border-amber-300 bg-amber-50 text-amber-800 shadow-2xs"><span>🔄</span><span>Retrying (${t.retry_count || 1}/${t.max_retries || 2})</span></span>`;
+              } else if (verStatus === 'awaiting_approval' || (hasApprovalGate && !isTaskCompleted)) {
+                verBadgeHtml = `<span id="plan-task-action-${taskNum}" class="plan-task-btn inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-xl border border-amber-300 bg-amber-100 text-amber-900 shadow-2xs"><span>🛡️</span><span>Awaiting Approval</span></span>`;
+              } else if (verStatus === 'failed') {
+                verBadgeHtml = `<span id="plan-task-action-${taskNum}" class="plan-task-btn inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-xl border border-rose-300 bg-rose-50 text-rose-700 shadow-2xs"><span>✕</span><span>Verification Failed</span></span>`;
+              } else {
+                verBadgeHtml = `<span id="plan-task-action-${taskNum}" class="plan-task-btn inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-100 text-slate-500"><span>⏳</span><span>Pending</span></span>`;
+              }
+
               return `
               <div id="plan-task-row-${taskNum}" 
                    data-requires-approval="${hasApprovalGate ? 'true' : 'false'}"
@@ -617,22 +634,7 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
                   </div>
                 </div>
                 <div class="flex items-center gap-2.5 flex-shrink-0">
-                  <button type="button" 
-                          id="plan-task-action-${taskNum}" 
-                          onclick="event.stopPropagation(); window.verifyPlanTask(${taskNum})" 
-                          ${!isTaskActive && !isTaskCompleted ? 'disabled' : ''}
-                          class="plan-task-btn text-xs font-semibold px-3.5 py-1.5 rounded-xl border transition flex items-center gap-1.5 ${
-                            isTaskCompleted 
-                              ? 'bg-emerald-50 text-emerald-700 border-emerald-300 cursor-pointer' 
-                              : isTaskActive 
-                              ? (hasApprovalGate
-                                  ? 'border-amber-500 bg-amber-500 hover:bg-amber-600 text-white font-bold shadow-xs cursor-pointer animate-pulse'
-                                  : 'border-blue-600 bg-blue-600 hover:bg-blue-700 text-white font-bold shadow-xs cursor-pointer animate-pulse')
-                              : 'border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed opacity-60'
-                          }">
-                    <span>${isTaskCompleted ? '✓' : (isTaskActive && hasApprovalGate ? '🛡️' : (isTaskActive ? '◯' : '🔒'))}</span>
-                    <span>${isTaskCompleted ? 'Verified' : (isTaskActive && hasApprovalGate ? 'Approve & Continue' : (isTaskActive ? 'Verify & Continue' : 'Verify'))}</span>
-                  </button>
+                  ${verBadgeHtml}
                 </div>
               </div>
             `;}).join('')}
@@ -696,16 +698,15 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
                   </div>
 
                   <div class="flex items-center gap-2 flex-shrink-0">
-                    <button type="button" 
-                            onclick="event.stopPropagation(); window.markTaskRowComplete(this.closest('.task-log-row'))"
-                            class="task-action-btn text-[11px] font-semibold px-2.5 py-1 rounded-lg border transition flex items-center gap-1 cursor-pointer ${
-                              isCompleted ? 'bg-emerald-50 text-emerald-700 border-emerald-300' :
-                              isInProgress ? 'bg-blue-50 text-blue-700 border-blue-300 shadow-xs' :
-                              'bg-white hover:bg-slate-100 text-slate-700 border-slate-300 shadow-xs'
-                            }">
-                      <span>${isCompleted ? '✓' : '◯'}</span>
-                      <span>${isCompleted ? 'Verified' : 'Mark Complete'}</span>
-                    </button>
+                    <span class="task-action-btn inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-lg border ${
+                      isCompleted ? 'bg-emerald-50 text-emerald-700 border-emerald-300' :
+                      isInProgress ? 'bg-blue-50 text-blue-700 border-blue-300 shadow-xs animate-pulse' :
+                      isFailed ? 'bg-rose-50 text-rose-700 border-rose-300' :
+                      'bg-slate-50 text-slate-500 border-slate-200'
+                    }">
+                      <span>${isCompleted ? '✓' : isInProgress ? '🔄' : isFailed ? '✕' : '⏳'}</span>
+                      <span>${isCompleted ? 'Verified' : isInProgress ? 'Verifying...' : isFailed ? 'Failed' : 'Pending'}</span>
+                    </span>
 
                     <span class="task-status-badge inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-0.5 rounded-full border ${
                       isCompleted ? 'bg-emerald-50 text-emerald-700 border-emerald-200/80' :
@@ -832,10 +833,39 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
             </div>
           </div>
 
+          ${taskVerifications && taskVerifications.length > 0 ? `
+            <div class="mt-6 pt-4 border-t border-slate-100">
+              <h3 class="text-xs font-bold text-slate-800 uppercase tracking-wider mb-3">Automatic Task Verification Records (${taskVerifications.length})</h3>
+              <div class="space-y-2">
+                ${taskVerifications.map((tv: any) => `
+                  <div class="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs flex items-start justify-between gap-3">
+                    <div>
+                      <div class="flex items-center gap-2 mb-1">
+                        <span class="font-mono font-bold text-slate-900">${tv.task_id}</span>
+                        <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full ${tv.verification_status === 'verified' ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' : tv.verification_status === 'retrying' ? 'bg-amber-100 text-amber-800 border border-amber-300' : 'bg-rose-100 text-rose-800 border border-rose-300'}">${tv.verification_status.toUpperCase()}</span>
+                        <span class="text-[10px] text-slate-400 font-mono">attempt #${tv.attempt_number}</span>
+                      </div>
+                      <div class="text-slate-600 mb-0.5"><span class="font-medium text-slate-700">Expected:</span> ${tv.expected_outcome}</div>
+                      <div class="text-slate-600"><span class="font-medium text-slate-700">Actual:</span> ${tv.actual_outcome}</div>
+                      ${tv.failure_reason ? `<div class="text-rose-600 mt-1 font-medium"><span class="font-bold">Failure:</span> ${tv.failure_reason}</div>` : ''}
+                    </div>
+                    <span class="text-[10px] text-slate-400 font-mono flex-shrink-0">${new Date(tv.completed_at).toLocaleTimeString()}</span>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+          ` : ''}
+
           <div class="mt-6 pt-4 border-t border-slate-100 flex justify-between items-center">
-            <button onclick="switchStep(3)" class="text-xs font-semibold text-slate-500 hover:text-slate-800 transition cursor-pointer">
-              ← Back to Use Tools
-            </button>
+            <div class="flex items-center gap-3">
+              <button onclick="switchStep(3)" class="text-xs font-semibold text-slate-500 hover:text-slate-800 transition cursor-pointer">
+                ← Back to Use Tools
+              </button>
+              <button onclick="window.showToast ? window.showToast('Re-checking verification evidence...', 'info', '🛡️') : null; setTimeout(() => location.reload(), 400);" class="text-xs font-semibold px-3 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 transition flex items-center gap-1 cursor-pointer">
+                <span>🔄</span>
+                <span>Re-check Evidence</span>
+              </button>
+            </div>
             <button onclick="userAdvanceStep(5)" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm cursor-pointer">
               <span>View Final Deliverables (Step 5) →</span>
             </button>
@@ -1173,20 +1203,6 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
 
       // User Advance button: progresses to next step cleanly
       function userAdvanceStep(nextStep) {
-        if (nextStep === 3) {
-          const rows = document.querySelectorAll('.plan-task-row');
-          const totalTasks = rows.length || 7;
-          let verifiedCount = 0;
-          for (let i = 1; i <= totalTasks; i++) {
-            const btn = document.getElementById('plan-task-action-' + i);
-            if (btn && btn.textContent.includes('Verified')) verifiedCount++;
-          }
-          if (verifiedCount < totalTasks) {
-            window.showToast ? window.showToast('Please verify all sub-tasks in Step 2 (' + verifiedCount + '/' + totalTasks + ' verified)', 'warning', '⚠️') : null;
-            switchStep(2);
-            return;
-          }
-        }
         for (let i = 1; i < nextStep; i++) {
           stageStatus[i] = 'completed';
         }
@@ -1713,32 +1729,52 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
       }
       window.toggleChecklistItem = toggleChecklistItem;
 
-      function setTaskState(rowEl, state) {
+      function setTaskState(rowEl, state, verStatus) {
         const icon = rowEl.querySelector('.task-status-icon');
         const badge = rowEl.querySelector('.task-status-badge');
         const label = rowEl.querySelector('.task-title-text');
         const actionBtn = rowEl.querySelector('.task-action-btn');
         if (!icon || !badge) return;
 
-        if (state === 'completed') {
+        if (state === 'completed' || verStatus === 'verified') {
           icon.className = 'task-status-icon w-6 h-6 rounded-full flex items-center justify-center text-xs flex-shrink-0 bg-emerald-600 text-white font-bold shadow-sm';
           icon.innerHTML = '✓';
           badge.className = 'task-status-badge inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-0.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200/80';
           badge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>Completed';
           if (label) label.className = 'task-title-text text-xs font-medium text-slate-800 truncate block';
           if (actionBtn) {
-            actionBtn.className = 'task-action-btn text-[11px] font-semibold px-2.5 py-1 rounded-lg border transition flex items-center gap-1 bg-emerald-50 text-emerald-700 border-emerald-300';
+            actionBtn.className = 'task-action-btn inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-lg border bg-emerald-50 text-emerald-700 border-emerald-300';
             actionBtn.innerHTML = '<span>✓</span><span>Verified</span>';
           }
-        } else if (state === 'in_progress') {
+        } else if (state === 'in_progress' || verStatus === 'verifying') {
           icon.className = 'task-status-icon w-6 h-6 rounded-full flex items-center justify-center text-xs flex-shrink-0 bg-blue-600 text-white font-bold ring-2 ring-blue-200 shadow-sm animate-pulse';
-          icon.innerHTML = '+';
+          icon.innerHTML = '🔄';
           badge.className = 'task-status-badge inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-0.5 rounded-full border bg-blue-50 text-blue-700 border-blue-200 animate-pulse';
-          badge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-blue-500"></span>In progress';
+          badge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-blue-500"></span>Verifying';
           if (label) label.className = 'task-title-text text-xs font-semibold text-slate-900 truncate block';
           if (actionBtn) {
-            actionBtn.className = 'task-action-btn text-[11px] font-bold px-2.5 py-1 rounded-lg border transition flex items-center gap-1 bg-blue-50 text-blue-700 border-blue-300 shadow-xs animate-pulse cursor-pointer';
-            actionBtn.innerHTML = '<span>✓</span><span>Mark Complete</span>';
+            actionBtn.className = 'task-action-btn inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-lg border bg-blue-50 text-blue-700 border-blue-300 shadow-xs animate-pulse';
+            actionBtn.innerHTML = '<span>🔄</span><span>Verifying...</span>';
+          }
+        } else if (state === 'failed' || verStatus === 'failed') {
+          icon.className = 'task-status-icon w-6 h-6 rounded-full flex items-center justify-center text-xs flex-shrink-0 bg-rose-600 text-white font-bold shadow-sm';
+          icon.innerHTML = '✕';
+          badge.className = 'task-status-badge inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-0.5 rounded-full border bg-rose-50 text-rose-700 border-rose-200';
+          badge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-rose-500"></span>Failed';
+          if (label) label.className = 'task-title-text text-xs font-semibold text-rose-600 truncate block';
+          if (actionBtn) {
+            actionBtn.className = 'task-action-btn inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-lg border bg-rose-50 text-rose-700 border-rose-300';
+            actionBtn.innerHTML = '<span>✕</span><span>Failed</span>';
+          }
+        } else if (verStatus === 'retrying') {
+          icon.className = 'task-status-icon w-6 h-6 rounded-full flex items-center justify-center text-xs flex-shrink-0 bg-amber-500 text-white font-bold shadow-sm animate-spin';
+          icon.innerHTML = '🔄';
+          badge.className = 'task-status-badge inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-0.5 rounded-full border bg-amber-50 text-amber-800 border-amber-200';
+          badge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>Retrying';
+          if (label) label.className = 'task-title-text text-xs font-semibold text-amber-800 truncate block';
+          if (actionBtn) {
+            actionBtn.className = 'task-action-btn inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-lg border bg-amber-50 text-amber-800 border-amber-300';
+            actionBtn.innerHTML = '<span>🔄</span><span>Retrying...</span>';
           }
         } else {
           icon.className = 'task-status-icon w-6 h-6 rounded-full flex items-center justify-center text-xs flex-shrink-0 border-2 border-slate-300 text-transparent';
@@ -1747,8 +1783,8 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
           badge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span>Pending';
           if (label) label.className = 'task-title-text text-xs font-medium text-slate-500 truncate block';
           if (actionBtn) {
-            actionBtn.className = 'task-action-btn text-[11px] font-semibold px-2.5 py-1 rounded-lg border transition flex items-center gap-1 bg-white hover:bg-slate-100 text-slate-700 border-slate-300 shadow-xs cursor-pointer';
-            actionBtn.innerHTML = '<span>◯</span><span>Verify</span>';
+            actionBtn.className = 'task-action-btn inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-lg border bg-slate-50 text-slate-500 border-slate-200';
+            actionBtn.innerHTML = '<span>⏳</span><span>Pending</span>';
           }
         }
       }
@@ -1909,7 +1945,28 @@ export function renderMissionDetailPage(missionId: string, db: OrchestratorDatab
                   const rows = document.querySelectorAll('.task-log-row');
                   rows.forEach(r => {
                     if (r.textContent && r.textContent.includes(task.title)) {
-                      setTaskState(r, task.status);
+                      setTaskState(r, task.status, task.verification_status);
+                    }
+                  });
+                  const planRows = document.querySelectorAll('.plan-task-row');
+                  planRows.forEach(r => {
+                    if (r.textContent && r.textContent.includes(task.title)) {
+                      const btn = r.querySelector('.plan-task-btn');
+                      if (btn) {
+                        if (task.status === 'completed' || task.verification_status === 'verified') {
+                          btn.className = 'plan-task-btn inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-xl border border-emerald-300 bg-emerald-50 text-emerald-700 shadow-2xs';
+                          btn.innerHTML = '<span>✓</span><span>Verified</span>';
+                        } else if (task.status === 'in_progress' || task.verification_status === 'verifying') {
+                          btn.className = 'plan-task-btn inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-xl border border-blue-300 bg-blue-50 text-blue-700 shadow-2xs animate-pulse';
+                          btn.innerHTML = '<span class="w-2 h-2 rounded-full bg-blue-600 animate-ping"></span><span>Verifying...</span>';
+                        } else if (task.verification_status === 'retrying') {
+                          btn.className = 'plan-task-btn inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-xl border border-amber-300 bg-amber-50 text-amber-800 shadow-2xs';
+                          btn.innerHTML = '<span>🔄</span><span>Retrying...</span>';
+                        } else if (task.verification_status === 'failed' || task.status === 'failed') {
+                          btn.className = 'plan-task-btn inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-xl border border-rose-300 bg-rose-50 text-rose-700 shadow-2xs';
+                          btn.innerHTML = '<span>✕</span><span>Verification Failed</span>';
+                        }
+                      }
                     }
                   });
                 }

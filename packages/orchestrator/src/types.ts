@@ -15,6 +15,15 @@ export type MissionStatus =
 
 export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'cancelled';
 
+export type TaskVerificationStatus =
+  | 'pending'
+  | 'verifying'
+  | 'verified'
+  | 'failed'
+  | 'retrying'
+  | 'awaiting_approval'
+  | 'inconclusive';
+
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired' | 'cancelled' | 'superseded';
 
 export interface MissionRow {
@@ -57,8 +66,25 @@ export interface MissionTaskRow {
   result_json: string | null;
   error_message: string | null;
   duration_ms: number;
+  verification_status: TaskVerificationStatus;
+  verification_evidence_json: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface TaskVerificationRecordRow {
+  id: string;
+  mission_id: string;
+  task_id: string;
+  attempt_number: number;
+  verification_status: TaskVerificationStatus;
+  expected_outcome: string;
+  actual_outcome: string;
+  evidence_json: string;
+  failure_reason: string | null;
+  started_at: string;
+  completed_at: string;
+  retry_count: number;
 }
 
 export interface TaskDependencyRow {

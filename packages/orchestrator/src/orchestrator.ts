@@ -4,7 +4,7 @@ import { MissionStateMachine } from './state-machine.js';
 import { ObjectiveUnderstandingEngine, ObjectiveUnderstanding } from './understanding.js';
 import { MissionPlanner } from './planner.js';
 import { ApprovalService } from './approvals.js';
-import { MissionVerifier } from './verifier.js';
+import { MissionVerifier, TaskVerifier } from './verifier.js';
 import { MissionRow, MissionTaskRow } from './types.js';
 import { withMcpRequestContext } from '@orchestra/mcp-client';
 
@@ -23,6 +23,7 @@ export class MissionOrchestrator {
   public planner: MissionPlanner;
   public approvalService: ApprovalService;
   public verifier: MissionVerifier;
+  public taskVerifier: TaskVerifier;
   public mcpClient: OrchestraMcpClient;
 
   public workerId: string;
@@ -41,6 +42,7 @@ export class MissionOrchestrator {
     this.planner = new MissionPlanner();
     this.approvalService = new ApprovalService(this.db);
     this.verifier = new MissionVerifier(this.db);
+    this.taskVerifier = new TaskVerifier(this.db);
     this.mcpClient = new OrchestraMcpClient({ serverUrl: options.serverUrl });
   }
 
@@ -162,15 +164,17 @@ export class MissionOrchestrator {
           case 'EXECUTING_APPROVED': {
             const nextTask = this.selectNextEligibleTask(missionId);
             if (!nextTask) {
-              // Check if all tasks completed
+              // Check if all tasks completed and verified
               const allTasks = this.db.getTasksForMission(missionId);
-              const allCompleted = allTasks.every(t => t.status === 'completed');
-              if (allCompleted) {
+              const allCompletedAndVerified = allTasks.every(
+                t => t.status === 'completed' && (!t.verification_status || t.verification_status === 'verified')
+              );
+              if (allCompletedAndVerified && allTasks.length > 0) {
                 this.stateMachine.transition(missionId, 'VERIFYING');
               } else {
-                const anyFailed = allTasks.some(t => t.status === 'failed');
+                const anyFailed = allTasks.some(t => t.status === 'failed' || t.verification_status === 'failed');
                 if (anyFailed) {
-                  this.stateMachine.transition(missionId, 'FAILED', 'One or more tasks failed');
+                  this.stateMachine.transition(missionId, 'FAILED', 'One or more tasks failed execution or verification');
                 } else {
                   // Deadlock or waiting
                   this.stateMachine.transition(missionId, 'FAILED', 'Deadlock detected: remaining tasks blocked');
@@ -189,6 +193,7 @@ export class MissionOrchestrator {
                 const actionParams = (params.parameters as Record<string, unknown>) || params;
 
                 const appRecord = this.approvalService.requestApproval(missionId, nextTask.id, actionType, actionParams);
+                this.db.updateTaskVerification(nextTask.id, 'awaiting_approval');
                 this.stateMachine.transition(missionId, 'AWAITING_APPROVAL', `Approval requested for task '${nextTask.title}'`);
                 const updatedM = this.db.getMission(missionId)!;
                 this.onStateTransition?.(missionId, 'AWAITING_APPROVAL', updatedM);
@@ -258,12 +263,17 @@ export class MissionOrchestrator {
     const tasks = this.db.getTasksForMission(missionId);
     const deps = this.db.getTaskDependencies(missionId);
 
-    const completedIds = new Set(tasks.filter(t => t.status === 'completed').map(t => t.id));
+    // Prerequisite tasks must be completed AND verified
+    const verifiedIds = new Set(
+      tasks
+        .filter(t => t.status === 'completed' && (!t.verification_status || t.verification_status === 'verified'))
+        .map(t => t.id)
+    );
 
     for (const t of tasks) {
       if (t.status === 'pending') {
         const taskDeps = deps.filter(d => d.task_id === t.id).map(d => d.depends_on_task_id);
-        const allDepsSatisfied = taskDeps.every(dId => completedIds.has(dId));
+        const allDepsSatisfied = taskDeps.every(dId => verifiedIds.has(dId));
         if (allDepsSatisfied) {
           return t;
         }
@@ -273,7 +283,7 @@ export class MissionOrchestrator {
   }
 
   private async executeTaskStep(task: MissionTaskRow, missionId: string): Promise<void> {
-    this.db.updateTaskStatus(task.id, 'in_progress');
+    this.db.updateTaskStatus(task.id, 'in_progress', null, null, 0, 'verifying');
     const runningTask = this.db.getTask(task.id);
     if (runningTask) {
       this.onTaskUpdated?.(missionId, runningTask, this.db.getTasksForMission(missionId));
@@ -293,9 +303,10 @@ export class MissionOrchestrator {
 
       // Call MCP Tool through the real client
       let rawResult: unknown;
+      let approvalRow: any = undefined;
       if (task.requires_approval === 1 && task.approval_id) {
-        const approval = this.db.getApproval(task.approval_id);
-        if (!approval) {
+        approvalRow = this.db.getApproval(task.approval_id);
+        if (!approvalRow) {
           throw new Error('Security policy blocked execution: approval record is missing.');
         }
         rawResult = await withMcpRequestContext({
@@ -303,7 +314,7 @@ export class MissionOrchestrator {
             missionId,
             taskId: task.id,
             actionType: inputArgs.actionType || task.tool_name,
-            fingerprint: approval.canonical_fingerprint,
+            fingerprint: approvalRow.canonical_fingerprint,
             parameters: inputArgs.parameters || inputArgs
           }
         }, () => this.mcpClient.callTool(task.tool_name, inputArgs));
@@ -317,12 +328,6 @@ export class MissionOrchestrator {
         ? { providerResponseReceived: true, privateDataOmitted: true }
         : rawResult;
       const resultJson = JSON.stringify(persistedResult);
-
-      this.db.updateTaskStatus(task.id, 'completed', resultJson, null, durationMs);
-      const completedTask = this.db.getTask(task.id);
-      if (completedTask) {
-        this.onTaskUpdated?.(missionId, completedTask, this.db.getTasksForMission(missionId));
-      }
 
       // Record tool invocation
       this.db.recordToolInvocation({
@@ -339,30 +344,105 @@ export class MissionOrchestrator {
         invoked_at: new Date().toISOString()
       });
 
-      this.db.recordActivity({
-        id: `act-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      // AUTOMATIC EVIDENCE-BASED VERIFICATION
+      const evalResult = this.taskVerifier.verifyTask(task, rawResult, inputArgs, approvalRow);
+      const attemptNumber = (task.retry_count || 0) + 1;
+      const verRecordId = `tvr-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+
+      this.db.recordTaskVerification({
+        id: verRecordId,
         missionId,
         taskId: task.id,
-        eventType: 'Tool',
-        title: `Executed ${task.tool_name}`,
-        description: `Task '${task.title}' completed in ${durationMs}ms`,
-        metadata: { toolName: task.tool_name, durationMs }
+        attemptNumber,
+        verificationStatus: evalResult.status,
+        expectedOutcome: evalResult.expectedOutcome,
+        actualOutcome: evalResult.actualOutcome,
+        evidenceJson: JSON.stringify(evalResult.evidence),
+        failureReason: evalResult.failureReason,
+        startedAt: new Date(start).toISOString(),
+        completedAt: new Date().toISOString(),
+        retryCount: task.retry_count || 0
       });
+
+      if (evalResult.isVerified) {
+        this.db.updateTaskStatus(
+          task.id,
+          'completed',
+          resultJson,
+          null,
+          durationMs,
+          'verified',
+          JSON.stringify(evalResult.evidence)
+        );
+        const completedTask = this.db.getTask(task.id);
+        if (completedTask) {
+          this.onTaskUpdated?.(missionId, completedTask, this.db.getTasksForMission(missionId));
+        }
+
+        this.db.recordActivity({
+          id: `act-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          missionId,
+          taskId: task.id,
+          eventType: 'Verification',
+          title: `Verified ${task.tool_name}`,
+          description: `Task '${task.title}' automatically verified: ${evalResult.actualOutcome}`,
+          metadata: { toolName: task.tool_name, evidence: evalResult.evidence, durationMs }
+        });
+      } else {
+        // Verification failed despite tool returning
+        const retries = this.db.incrementTaskRetry(task.id);
+        const canRetry = evalResult.canRetry && retries <= task.max_retries;
+
+        if (canRetry) {
+          this.db.updateTaskStatus(
+            task.id,
+            'pending',
+            resultJson,
+            `Verification failed (attempt ${retries}/${task.max_retries}): ${evalResult.failureReason}`,
+            durationMs,
+            'retrying',
+            JSON.stringify(evalResult.evidence)
+          );
+          this.db.recordActivity({
+            id: `act-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            missionId,
+            taskId: task.id,
+            eventType: 'Recovery',
+            title: `Retrying ${task.tool_name}`,
+            description: `Automatic verification failed: ${evalResult.failureReason}. Retrying (${retries}/${task.max_retries})...`,
+            metadata: { toolName: task.tool_name, retryCount: retries, failureReason: evalResult.failureReason }
+          });
+        } else {
+          this.db.updateTaskStatus(
+            task.id,
+            'failed',
+            resultJson,
+            `Verification failed: ${evalResult.failureReason}`,
+            durationMs,
+            evalResult.status === 'inconclusive' ? 'inconclusive' : 'failed',
+            JSON.stringify(evalResult.evidence)
+          );
+          this.db.recordActivity({
+            id: `act-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            missionId,
+            taskId: task.id,
+            eventType: 'Verification',
+            title: `Verification Failed: ${task.tool_name}`,
+            description: `Task '${task.title}' failed verification: ${evalResult.failureReason}`,
+            metadata: { toolName: task.tool_name, failureReason: evalResult.failureReason }
+          });
+        }
+
+        const finishedTask = this.db.getTask(task.id);
+        if (finishedTask) {
+          this.onTaskUpdated?.(missionId, finishedTask, this.db.getTasksForMission(missionId));
+        }
+      }
     } catch (err: unknown) {
       const durationMs = Date.now() - start;
       const errMsg = err instanceof Error ? err.message : String(err);
 
-      const retries = this.db.incrementTaskRetry(task.id);
-      if (retries <= task.max_retries) {
-        this.db.updateTaskStatus(task.id, 'pending', null, `Retryable failure (${retries}/${task.max_retries}): ${errMsg}`, durationMs);
-      } else {
-        this.db.updateTaskStatus(task.id, 'failed', null, errMsg, durationMs);
-      }
-      const finishedTask = this.db.getTask(task.id);
-      if (finishedTask) {
-        this.onTaskUpdated?.(missionId, finishedTask, this.db.getTasksForMission(missionId));
-      }
-
+      // Record failed tool invocation
       this.db.recordToolInvocation({
         id: `inv-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
         mission_id: missionId,
@@ -374,6 +454,50 @@ export class MissionOrchestrator {
         duration_ms: durationMs,
         invoked_at: new Date().toISOString()
       });
+
+      // Record failed verification attempt
+      const retries = this.db.incrementTaskRetry(task.id);
+      const attemptNumber = retries;
+      this.db.recordTaskVerification({
+        id: `tvr-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        missionId,
+        taskId: task.id,
+        attemptNumber,
+        verificationStatus: 'failed',
+        expectedOutcome: `Execution of ${task.tool_name} without runtime errors`,
+        actualOutcome: `Execution threw error: ${errMsg}`,
+        evidenceJson: JSON.stringify({ error: errMsg }),
+        failureReason: errMsg,
+        startedAt: new Date(start).toISOString(),
+        completedAt: new Date().toISOString(),
+        retryCount: retries
+      });
+
+      if (retries <= task.max_retries) {
+        this.db.updateTaskStatus(
+          task.id,
+          'pending',
+          null,
+          `Retryable failure (${retries}/${task.max_retries}): ${errMsg}`,
+          durationMs,
+          'retrying',
+          null
+        );
+      } else {
+        this.db.updateTaskStatus(
+          task.id,
+          'failed',
+          null,
+          errMsg,
+          durationMs,
+          'failed',
+          null
+        );
+      }
+      const finishedTask = this.db.getTask(task.id);
+      if (finishedTask) {
+        this.onTaskUpdated?.(missionId, finishedTask, this.db.getTasksForMission(missionId));
+      }
     }
   }
 

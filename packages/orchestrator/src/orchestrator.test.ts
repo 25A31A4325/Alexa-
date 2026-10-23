@@ -357,4 +357,290 @@ test('ORCHESTRA Comprehensive Orchestration Engine Test Suite', async (t) => {
 
     await restoredOrch.close();
   });
+
+  // =========================================================================
+  // AUTOMATIC VERIFICATION SUITE
+  // =========================================================================
+
+  // AUTO-VERIFY-01: Successful task triggers automatic verification without manual click
+  await t.test('AUTO-VERIFY-01: Successful task triggers verification automatically', async () => {
+    const orch = new MissionOrchestrator({ serverUrl: TEST_URL });
+    await orch.connect();
+
+    const missionId = 'm-auto-ver-1';
+    orch.submitMission(missionId, 'Prepare meeting');
+    orch.db.updateMissionStatus(missionId, 'DISCOVERING_TOOLS');
+    const plan = orch.db.createPlan(`p-${missionId}`, missionId);
+
+    const task = orch.db.createTask({
+      id: `t-auto-1`,
+      missionId,
+      planId: plan.id,
+      stepIndex: 1,
+      title: 'Fetch meeting context',
+      toolName: 'get_conversation_context',
+      toolInputTemplate: JSON.stringify({ contextKeys: ['active_meeting'] })
+    });
+
+    const emittedStatuses: string[] = [];
+    orch.onTaskUpdated = (_mId, updatedTask) => {
+      emittedStatuses.push(updatedTask.verification_status);
+    };
+
+    await orch.executeMissionUntilPause(missionId);
+
+    const finishedTask = orch.db.getTask(task.id)!;
+    assert.equal(finishedTask.status, 'completed', 'Task completed');
+    assert.equal(finishedTask.verification_status, 'verified', 'Task automatically verified');
+    assert.ok(finishedTask.verification_evidence_json, 'Evidence JSON stored on task');
+    assert.ok(emittedStatuses.includes('verifying'), 'Emitted verifying status');
+    assert.ok(emittedStatuses.includes('verified'), 'Emitted verified status');
+
+    // Verify structured verification record exists
+    const records = orch.db.getTaskVerifications(task.id);
+    assert.equal(records.length, 1);
+    assert.equal(records[0]!.verification_status, 'verified');
+    assert.equal(records[0]!.attempt_number, 1);
+    assert.ok(records[0]!.expected_outcome.includes('Context memory retrieved'));
+
+    await orch.close();
+  });
+
+  // AUTO-VERIFY-02: Insufficient evidence never produces false success
+  await t.test('AUTO-VERIFY-02: Insufficient or empty evidence never produces false success', async () => {
+    const orch = new MissionOrchestrator({ serverUrl: TEST_URL });
+    await orch.connect();
+
+    const missionId = 'm-dummy';
+    orch.submitMission(missionId, 'Dummy mission');
+    const plan = orch.db.createPlan('p-dummy', missionId);
+
+    const task = orch.db.createTask({
+      id: `t-insufficient-1`,
+      missionId,
+      planId: plan.id,
+      stepIndex: 1,
+      title: 'Analyze documents with empty output',
+      toolName: 'analyze_document',
+      toolInputTemplate: JSON.stringify({})
+    });
+
+    // 1. Null / undefined result produces inconclusive / failure, never success
+    const evalNull = orch.taskVerifier.verifyTask(task, null);
+    assert.equal(evalNull.isVerified, false);
+    assert.equal(evalNull.status, 'inconclusive');
+
+    // 2. Empty object output produces inconclusive, never false success
+    const evalEmpty = orch.taskVerifier.verifyTask(task, {});
+    assert.equal(evalEmpty.isVerified, false);
+    assert.equal(evalEmpty.status, 'inconclusive');
+
+    // 3. Document retrieval with missing content produces failed
+    const docTask = orch.db.createTask({
+      id: `t-doc-fail`,
+      missionId,
+      planId: plan.id,
+      stepIndex: 2,
+      title: 'Retrieve document',
+      toolName: 'retrieve_document',
+      toolInputTemplate: JSON.stringify({ documentId: 'doc-q4-roadmap' })
+    });
+    const evalDocEmpty = orch.taskVerifier.verifyTask(docTask, { id: 'doc-q4-roadmap', content: '   ' });
+    assert.equal(evalDocEmpty.isVerified, false);
+    assert.equal(evalDocEmpty.status, 'failed');
+
+    // 4. Mismatched document ID fails verification
+    const evalDocMismatch = orch.taskVerifier.verifyTask(docTask, { id: 'wrong-doc', content: 'Some valid text content' });
+    assert.equal(evalDocMismatch.isVerified, false);
+    assert.equal(evalDocMismatch.status, 'failed');
+
+    await orch.close();
+  });
+
+  // AUTO-VERIFY-03: Failed verification triggers safe retry and exhausted retries fail task
+  await t.test('AUTO-VERIFY-03: Verification failure triggers safe retry and exhausted retries fail task', async () => {
+    const orch = new MissionOrchestrator({ serverUrl: TEST_URL });
+    await orch.connect();
+
+    const missionId = 'm-retry-test';
+    orch.submitMission(missionId, 'Test retry recovery');
+    orch.db.updateMissionStatus(missionId, 'DISCOVERING_TOOLS');
+    const plan = orch.db.createPlan(`p-${missionId}`, missionId);
+
+    // Create task with maxRetries: 2 targeting a non-existent document
+    const task = orch.db.createTask({
+      id: `t-retry-1`,
+      missionId,
+      planId: plan.id,
+      stepIndex: 1,
+      title: 'Retrieve non-existent doc',
+      toolName: 'retrieve_document',
+      toolInputTemplate: JSON.stringify({ documentId: 'non-existent-doc-id-xyz' }),
+      maxRetries: 1
+    });
+
+    await orch.executeMissionUntilPause(missionId);
+
+    const failedTask = orch.db.getTask(task.id)!;
+    assert.equal(failedTask.status, 'failed', 'Task marked failed after retries exhausted');
+    assert.equal(failedTask.verification_status, 'failed', 'Verification status marked failed');
+    assert.ok(failedTask.retry_count > 0, 'Retry count incremented');
+
+    const records = orch.db.getTaskVerifications(task.id);
+    assert.ok(records.length >= 1, 'Verification attempt records stored');
+    assert.equal(records[records.length - 1]!.verification_status, 'failed');
+
+    await orch.close();
+  });
+
+  // AUTO-VERIFY-04: Dependent task does not run before prerequisites are verified
+  await t.test('AUTO-VERIFY-04: Dependent task does not run before prerequisites are verified', async () => {
+    const orch = new MissionOrchestrator({ serverUrl: TEST_URL });
+    await orch.connect();
+
+    const missionId = 'm-dep-gate-test';
+    orch.submitMission(missionId, 'Test dependency verification gate');
+    orch.db.updateMissionStatus(missionId, 'DISCOVERING_TOOLS');
+    const plan = orch.db.createPlan(`p-${missionId}`, missionId);
+
+    // Task 1: will fail verification
+    const task1 = orch.db.createTask({
+      id: `t-gate-1`,
+      missionId,
+      planId: plan.id,
+      stepIndex: 1,
+      title: 'Prerequisite task that fails',
+      toolName: 'retrieve_document',
+      toolInputTemplate: JSON.stringify({ documentId: 'does-not-exist' }),
+      maxRetries: 0
+    });
+
+    // Task 2: depends on Task 1
+    const task2 = orch.db.createTask({
+      id: `t-gate-2`,
+      missionId,
+      planId: plan.id,
+      stepIndex: 2,
+      title: 'Dependent downstream task',
+      toolName: 'search_knowledge',
+      toolInputTemplate: JSON.stringify({ query: 'Q1' })
+    });
+    orch.db.addTaskDependency(task2.id, task1.id);
+
+    await orch.executeMissionUntilPause(missionId);
+
+    const t1 = orch.db.getTask(task1.id)!;
+    const t2 = orch.db.getTask(task2.id)!;
+
+    assert.equal(t1.status, 'failed', 'Task 1 failed');
+    assert.equal(t2.status, 'pending', 'Task 2 was blocked and NEVER executed');
+
+    await orch.close();
+  });
+
+  // AUTO-VERIFY-05: Consequential action strictly enforces human approval before execution and verifies after
+  await t.test('AUTO-VERIFY-05: Consequential action cannot bypass approval and automatically verifies after approval', async () => {
+    const orch = new MissionOrchestrator({ serverUrl: TEST_URL });
+    await orch.connect();
+
+    const missionId = 'm-appr-gate-test';
+    orch.submitMission(missionId, 'Test consequential action verification');
+    orch.db.updateMissionStatus(missionId, 'DISCOVERING_TOOLS');
+    const plan = orch.db.createPlan(`p-${missionId}`, missionId);
+
+    const task = orch.db.createTask({
+      id: `t-conseq-1`,
+      missionId,
+      planId: plan.id,
+      stepIndex: 1,
+      title: 'Set meeting reminder',
+      toolName: 'calendar_create_reminder',
+      toolInputTemplate: JSON.stringify({
+        title: 'Product Roadmap Review',
+        reminderTime: 'Tomorrow 9:45 AM'
+      }),
+      requiresApproval: true
+    });
+
+    // 1. Initial execution halts at approval
+    const mission = await orch.executeMissionUntilPause(missionId);
+    assert.equal(mission.status, 'AWAITING_APPROVAL', 'Mission halted at approval');
+
+    const pendingTask = orch.db.getTask(task.id)!;
+    assert.equal(pendingTask.verification_status, 'awaiting_approval', 'Task verification status is awaiting_approval');
+
+    const app = orch.db.getPendingApprovalForTask(task.id)!;
+    assert.ok(app);
+
+    // 2. Resolve approval with valid fingerprint
+    const resumed = await orch.resumeWithApproval(
+      missionId,
+      app.id,
+      app.canonical_fingerprint,
+      'approved',
+      'User authorized reminder'
+    );
+    assert.ok(resumed);
+
+    // 3. Execution resumes, action executes, and task is AUTOMATICALLY verified!
+    const verifiedTask = orch.db.getTask(task.id)!;
+    assert.equal(verifiedTask.status, 'completed', 'Task completed');
+    assert.equal(verifiedTask.verification_status, 'verified', 'Task automatically verified after approved execution');
+
+    const records = orch.db.getTaskVerifications(task.id);
+    assert.ok(records.length >= 1);
+    assert.equal(records[records.length - 1]!.verification_status, 'verified');
+    assert.ok(records[records.length - 1]!.expected_outcome.includes('reminder'));
+
+    await orch.close();
+  });
+
+  // AUTO-VERIFY-06: Verification history persists across application restarts in SQLite
+  await t.test('AUTO-VERIFY-06: Verification history persists across database restarts', async () => {
+    const PERSIST_DB = path.join(process.cwd(), 'test-persist-verify.db');
+    if (fs.existsSync(PERSIST_DB)) {
+      try { fs.unlinkSync(PERSIST_DB); } catch {}
+    }
+
+    try {
+      const db1 = new OrchestratorDatabase(PERSIST_DB);
+      db1.createMission('m-pers', 'Persistent test');
+      const plan = db1.createPlan('p-pers', 'm-pers');
+      const t = db1.createTask({
+        id: 't-pers-1',
+        missionId: 'm-pers',
+        planId: plan.id,
+        stepIndex: 1,
+        title: 'Persistent task',
+        toolName: 'get_task_status'
+      });
+
+      db1.recordTaskVerification({
+        id: 'tvr-pers-1',
+        missionId: 'm-pers',
+        taskId: t.id,
+        attemptNumber: 1,
+        verificationStatus: 'verified',
+        expectedOutcome: 'Task read-back confirmed',
+        actualOutcome: 'Retrieved 1 task',
+        evidenceJson: JSON.stringify({ totalTasks: 1 }),
+        startedAt: new Date().toISOString(),
+        completedAt: new Date().toISOString()
+      });
+      db1.close();
+
+      // Open new database connection to same file
+      const db2 = new OrchestratorDatabase(PERSIST_DB);
+      const records = db2.getTaskVerifications('t-pers-1');
+      assert.equal(records.length, 1);
+      assert.equal(records[0]!.verification_status, 'verified');
+      assert.equal(records[0]!.expected_outcome, 'Task read-back confirmed');
+      assert.deepEqual(JSON.parse(records[0]!.evidence_json), { totalTasks: 1 });
+      db2.close();
+    } finally {
+      if (fs.existsSync(PERSIST_DB)) {
+        try { fs.unlinkSync(PERSIST_DB); } catch {}
+      }
+    }
+  });
 });

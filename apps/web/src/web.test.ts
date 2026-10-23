@@ -1529,4 +1529,27 @@ describe('ORCHESTRA Phase 5.1 — UI/Backend Integration & Security Audit', () =
     // 4. Verify completion sets hasSeenIntro
     assert.ok(homeHtml.includes("sessionStorage.setItem('hasSeenIntro', 'true')"), 'Completion must mark hasSeenIntro in session store');
   });
+
+  // =========================================================================
+  // 18. AUTOMATIC VERIFICATION UI & BACKEND WORKFLOW AUDIT
+  // =========================================================================
+  test('UI-AUTO-VERIFY-01: Mission Detail page renders automatic verification badges without mandatory manual clicks', async () => {
+    // 1. Fetch demo mission detail page
+    const res = await fetch(`${webBaseUrl}/missions/demo-meeting-prep`);
+    assert.equal(res.status, 200, 'GET /missions/demo-meeting-prep must return 200 OK');
+    const html = await res.text();
+
+    // 2. Verify automatic verification badges are present in Step 2 Plan and Step 3 Tools
+    assert.ok(html.includes('Verified'), 'Must render Verified status');
+    assert.ok(html.includes('Autonomous Verification Active'), 'Must render Autonomous Verification Active badge in Plan DAG');
+
+    // 3. Verify manual verification click wall is removed from userAdvanceStep
+    assert.ok(!html.includes("window.showToast('Please verify all sub-tasks in Step 2"), 'Manual verify blocking toast must not be in userAdvanceStep');
+
+    // 4. Verify Step 4 includes independent deliverable verification confidence and audit proof
+    assert.ok(html.includes('Step 4: Independent Deliverable Verification'), 'Must render Step 4 Independent Verification');
+    assert.ok(html.includes('Confidence Score:'), 'Must render verification confidence score');
+    assert.ok(html.includes('Cryptographic Audit Proof'), 'Must render cryptographic audit proof');
+    assert.ok(html.includes('Re-check Evidence'), 'Must provide re-check verification button for troubleshooting');
+  });
 });
