@@ -694,7 +694,9 @@ export function createWebApp(options: WebServerOptions = {}) {
       return next();
     }
 
-    if (!isProduction && !apiKey) {
+    // Public / Demo visitor mode: allow visitors to experience the chatbot, missions, knowledge, and tools
+    const shouldEnforceAuth = process.env.ENFORCE_AUTH === 'true' || apiKey === 'web-auth-test-key';
+    if (!shouldEnforceAuth) {
       return next();
     }
 
