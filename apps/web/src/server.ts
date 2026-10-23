@@ -785,7 +785,8 @@ export function createWebApp(options: WebServerOptions = {}) {
         timestamp: Date.now(),
         ...event
       };
-      const message = `id: ${eventId}\nevent: ${event.type}\ndata: ${JSON.stringify(payload)}\n\n`;
+      const message = `id: ${eventId}\nevent: ${event.type}\ndata: ${JSON.stringify(payload)}\n\n` +
+                      `id: ${eventId}-gen\nevent: message\ndata: ${JSON.stringify(payload)}\n\n`;
       for (const res of clients) {
         try {
           res.write(message);
@@ -1070,6 +1071,80 @@ export function createWebApp(options: WebServerOptions = {}) {
       });
     } catch (err: any) {
       return res.status(500).json({ error: err.message || 'Failed to submit mission' });
+    }
+  });
+
+  // 1b. Execute / Resume Mission Execution
+  app.post('/api/missions/:id/execute', async (req: Request, res: Response) => {
+    try {
+      const missionId = String(req.params.id);
+      if (missionId === 'demo-meeting-prep') {
+        ensureDemoMeetingPrep(orchestrator!.db);
+      }
+      const mission = orchestrator!.db.getMission(missionId);
+      if (!mission || !canAccessMission(missionId, optionalSessionId(req, res))) {
+        return res.status(404).json({ error: 'Mission not found' });
+      }
+
+      if (mission.status === 'COMPLETED' || mission.status === 'CANCELLED' || mission.status === 'AWAITING_APPROVAL') {
+        return res.json({ success: true, missionId, status: mission.status, message: `Mission is in state ${mission.status}` });
+      }
+
+      if (!orchestrator!.mcpClient.isConnected()) {
+        await orchestrator!.mcpClient.connect();
+      }
+
+      const ownerSessionId = optionalSessionId(req, res);
+      (async () => {
+        try {
+          await withMcpRequestContext(
+            { sessionId: ownerSessionId },
+            () => orchestrator!.executeMissionUntilPause(missionId)
+          );
+          broadcastMissionEvent(missionId, { type: 'state_transition' });
+        } catch (err: any) {
+          console.error(`[ORCHESTRA WEB] Execution error for mission ${missionId}:`, err);
+          broadcastMissionEvent(missionId, { type: 'error', data: { message: err?.message || String(err) } });
+        }
+      })();
+
+      return res.json({
+        success: true,
+        missionId,
+        status: mission.status
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || 'Failed to execute mission' });
+    }
+  });
+
+  // 1c. Reset and Re-run Demo Mission from scratch
+  app.post('/api/missions/:id/reset', async (req: Request, res: Response) => {
+    try {
+      const missionId = String(req.params.id);
+      const ownerSessionId = optionalSessionId(req, res);
+      if (!canAccessMission(missionId, ownerSessionId)) {
+        return res.status(404).json({ error: 'Mission not found' });
+      }
+
+      (orchestratorDb as any).db.prepare('DELETE FROM approvals WHERE mission_id = ?').run(missionId);
+      (orchestratorDb as any).db.prepare('DELETE FROM task_verification_records WHERE mission_id = ?').run(missionId);
+      (orchestratorDb as any).db.prepare('DELETE FROM tool_invocation_records WHERE mission_id = ?').run(missionId);
+      (orchestratorDb as any).db.prepare('DELETE FROM mission_task_dependencies WHERE task_id IN (SELECT id FROM mission_tasks WHERE mission_id = ?)').run(missionId);
+      (orchestratorDb as any).db.prepare('DELETE FROM mission_tasks WHERE mission_id = ?').run(missionId);
+      (orchestratorDb as any).db.prepare('DELETE FROM mission_plans WHERE mission_id = ?').run(missionId);
+      (orchestratorDb as any).db.prepare('DELETE FROM missions WHERE id = ?').run(missionId);
+
+      if (missionId === 'demo-meeting-prep') {
+        ensureDemoMeetingPrep(orchestratorDb);
+      } else {
+        orchestrator!.submitMission(missionId, 'Reset goal');
+      }
+
+      broadcastMissionEvent(missionId, { type: 'state_transition', data: { status: 'RESET' } });
+      return res.json({ success: true, missionId });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || 'Failed to reset mission' });
     }
   });
 
